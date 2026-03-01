@@ -1,0 +1,118 @@
+package environment
+
+import (
+	"log/slog"
+
+	"github.com/maxkorbacher/vibed/internal/k8s"
+	"github.com/maxkorbacher/vibed/pkg/api"
+
+	"k8s.io/client-go/discovery"
+)
+
+// Detector probes the Kubernetes cluster to determine which deployment
+// targets are available.
+type Detector struct {
+	discovery discovery.DiscoveryInterface
+	logger    *slog.Logger
+}
+
+// NewDetector creates a new environment detector.
+func NewDetector(clients *k8s.Clients, logger *slog.Logger) *Detector {
+	return &Detector{
+		discovery: clients.Discovery,
+		logger:    logger,
+	}
+}
+
+// DetectResult holds the availability of each deployment target.
+type DetectResult struct {
+	Knative   bool
+	WasmCloud bool
+	// Kubernetes is always available if we can talk to the cluster.
+	Kubernetes bool
+}
+
+// Detect checks which deployment targets are available in the cluster.
+func (d *Detector) Detect() *DetectResult {
+	result := &DetectResult{
+		Kubernetes: true, // Always available if we have a client.
+	}
+
+	knative, err := k8s.HasCRD(d.discovery, "serving.knative.dev", "v1", "services")
+	if err != nil {
+		d.logger.Warn("failed to check for Knative CRDs", "error", err)
+	}
+	result.Knative = knative
+
+	wasmcloud, err := k8s.HasCRD(d.discovery, "core.oam.dev", "v1beta1", "applications")
+	if err != nil {
+		d.logger.Warn("failed to check for wasmCloud CRDs", "error", err)
+	}
+	result.WasmCloud = wasmcloud
+
+	d.logger.Info("detected deployment targets",
+		"knative", result.Knative,
+		"wasmcloud", result.WasmCloud,
+		"kubernetes", result.Kubernetes,
+	)
+
+	return result
+}
+
+// SelectTarget chooses the best available deployment target.
+// Priority: Knative > wasmCloud > Kubernetes (plain).
+func (d *Detector) SelectTarget(preferred api.DeploymentTarget) (api.DeploymentTarget, error) {
+	result := d.Detect()
+
+	switch preferred {
+	case api.TargetKnative:
+		if !result.Knative {
+			return "", &api.ErrTargetUnavailable{Target: api.TargetKnative}
+		}
+		return api.TargetKnative, nil
+
+	case api.TargetWasmCloud:
+		if !result.WasmCloud {
+			return "", &api.ErrTargetUnavailable{Target: api.TargetWasmCloud}
+		}
+		return api.TargetWasmCloud, nil
+
+	case api.TargetKubernetes:
+		return api.TargetKubernetes, nil
+
+	default: // "auto"
+		if result.Knative {
+			return api.TargetKnative, nil
+		}
+		if result.WasmCloud {
+			return api.TargetWasmCloud, nil
+		}
+		return api.TargetKubernetes, nil
+	}
+}
+
+// ListTargets returns info about all deployment targets.
+func (d *Detector) ListTargets() []api.TargetInfo {
+	result := d.Detect()
+
+	return []api.TargetInfo{
+		{
+			Name:        api.TargetKnative,
+			Available:   result.Knative,
+			Preferred:   true,
+			Description: "Knative Serving - serverless deployment with auto-scaling and clean URLs",
+		},
+		{
+			Name:        api.TargetKubernetes,
+			Available:   result.Kubernetes,
+			Preferred:   false,
+			Description: "Plain Kubernetes - Deployment + Service (always available)",
+		},
+		{
+			Name:        api.TargetWasmCloud,
+			Available:   result.WasmCloud,
+			Preferred:   false,
+			Description: "wasmCloud - WebAssembly component deployment via OAM",
+		},
+	}
+}

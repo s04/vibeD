@@ -1,0 +1,27 @@
+server:
+  transport: "stdio"
+  httpAddr: ":8080"
+
+deployment:
+  preferredTarget: "auto"
+  namespace: "default"
+
+builder:
+  image: "paketobuildpacks/builder-jammy-base:latest"
+  pullPolicy: "if-not-present"
+  containerRuntime: "auto"
+
+storage:
+  backend: "local"
+  local:
+    basePath: "/tmp/vibed-artifacts"
+
+registry:
+  enabled: false
+
+store:
+  backend: "memory"
+
+knative:
+  domainSuffix: "127.0.0.1.sslip.io"
+  ingressClass: "kourier.ingress.networking.knative.dev"

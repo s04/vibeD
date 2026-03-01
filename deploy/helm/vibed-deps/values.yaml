@@ -1,0 +1,13 @@
+# Knative Serving configuration
+knative:
+  enabled: true
+  version: "v1.17.0"
+  kourier:
+    nodePort: 31080
+  domain: "127.0.0.1.sslip.io"
+
+# wasmCloud configuration
+wasmcloud:
+  enabled: false
+  hostConfig:
+    enabled: true

@@ -1,0 +1,32 @@
+package mcp
+
+import (
+	"context"
+
+	"github.com/maxkorbacher/vibed/internal/orchestrator"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+type updateArtifactInput struct {
+	ArtifactID string            `json:"artifact_id" jsonschema:"description=ID of the artifact to update"`
+	Files      map[string]string `json:"files" jsonschema:"description=Updated file map (full replacement of source files)"`
+	EnvVars    map[string]string `json:"env_vars,omitempty" jsonschema:"description=Updated environment variables"`
+}
+
+func registerUpdateTool(server *mcp.Server, orch *orchestrator.Orchestrator) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "update_artifact",
+		Description: "Update an existing deployed artifact with new source files. Triggers a rebuild and redeployment.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input updateArtifactInput) (*mcp.CallToolResult, *orchestrator.DeployResult, error) {
+		result, err := orch.Update(ctx, orchestrator.UpdateRequest{
+			ArtifactID: input.ArtifactID,
+			Files:      input.Files,
+			EnvVars:    input.EnvVars,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return nil, result, nil
+	})
+}

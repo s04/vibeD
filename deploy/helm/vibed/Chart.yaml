@@ -1,0 +1,15 @@
+apiVersion: v2
+name: vibed
+description: Workload orchestrator for GenAI-generated artifacts
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - mcp
+  - genai
+  - vibe-coding
+  - kubernetes
+  - knative
+  - wasmcloud
+maintainers:
+  - name: Max Korbacher

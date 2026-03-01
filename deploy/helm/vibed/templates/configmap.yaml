@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vibed.fullname" . }}-config
+  labels:
+    {{- include "vibed.labels" . | nindent 4 }}
+data:
+  vibed.yaml: |
+    server:
+      transport: {{ .Values.config.server.transport | quote }}
+      httpAddr: {{ .Values.config.server.httpAddr | quote }}
+    deployment:
+      preferredTarget: {{ .Values.config.deployment.preferredTarget | quote }}
+      namespace: {{ .Values.config.deployment.namespace | quote }}
+    builder:
+      image: {{ .Values.config.builder.image | quote }}
+      pullPolicy: {{ .Values.config.builder.pullPolicy | quote }}
+      containerRuntime: {{ .Values.config.builder.containerRuntime | quote }}
+    storage:
+      backend: {{ .Values.config.storage.backend | quote }}
+      local:
+        basePath: {{ .Values.config.storage.local.basePath | quote }}
+    registry:
+      enabled: {{ .Values.config.registry.enabled }}
+    store:
+      backend: {{ .Values.config.store.backend | quote }}
+      configmap:
+        name: {{ .Values.config.store.configmap.name | quote }}
+        namespace: {{ default .Release.Namespace .Values.config.store.configmap.namespace | quote }}
+    knative:
+      domainSuffix: {{ .Values.config.knative.domainSuffix | quote }}
+      ingressClass: {{ .Values.config.knative.ingressClass | quote }}

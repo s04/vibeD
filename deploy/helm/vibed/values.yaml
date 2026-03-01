@@ -1,0 +1,64 @@
+replicaCount: 1
+
+image:
+  repository: vibed
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  hosts:
+    - host: vibed.local
+      paths:
+        - path: /
+          pathType: Prefix
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+serviceAccount:
+  create: true
+  name: ""
+
+config:
+  server:
+    transport: "http"
+    httpAddr: ":8080"
+  deployment:
+    preferredTarget: "auto"
+    namespace: "default"
+  builder:
+    image: "paketobuildpacks/builder-jammy-base:latest"
+    pullPolicy: "if-not-present"
+    containerRuntime: "auto"
+  storage:
+    backend: "local"
+    local:
+      basePath: "/data/vibed/artifacts"
+  registry:
+    enabled: false
+  store:
+    backend: "configmap"
+    configmap:
+      name: "vibed-artifacts"
+      namespace: ""  # Defaults to release namespace
+  knative:
+    domainSuffix: "127.0.0.1.sslip.io"
+    ingressClass: "kourier.ingress.networking.knative.dev"
+
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
