@@ -43,9 +43,11 @@ deployment:
   namespace: "default"        # K8s namespace for deployed artifacts
 
 builder:
-  image: "paketobuildpacks/builder-jammy-base:latest"
-  pullPolicy: "if-not-present"  # always | never | if-not-present
-  containerRuntime: "auto"      # auto | docker | podman
+  engine: "buildah"             # Container image builder (Buildah via K8s Jobs)
+  buildah:
+    image: "quay.io/buildah/stable:latest"  # Buildah container image
+    timeout: "10m"              # Build job timeout
+    insecure: false             # Set true for HTTP registries (e.g. in-cluster)
 
 storage:
   backend: "local"            # local | github | gitlab
@@ -90,7 +92,9 @@ Every config field has an environment variable override:
 | `VIBED_SERVER_HTTP_ADDR` | `server.httpAddr` | `:9090` |
 | `VIBED_DEPLOYMENT_PREFERRED_TARGET` | `deployment.preferredTarget` | `knative` |
 | `VIBED_DEPLOYMENT_NAMESPACE` | `deployment.namespace` | `apps` |
-| `VIBED_BUILDER_IMAGE` | `builder.image` | `paketobuildpacks/...` |
+| `VIBED_BUILDER_ENGINE` | `builder.engine` | `buildah` |
+| `VIBED_BUILDER_BUILDAH_IMAGE` | `builder.buildah.image` | `quay.io/buildah/stable:latest` |
+| `VIBED_BUILDER_BUILDAH_INSECURE` | `builder.buildah.insecure` | `true` |
 | `VIBED_STORAGE_BACKEND` | `storage.backend` | `github` or `gitlab` |
 | `VIBED_STORAGE_LOCAL_BASE_PATH` | `storage.local.basePath` | `/data` |
 | `VIBED_STORAGE_GITHUB_OWNER` | `storage.github.owner` | `myorg` |

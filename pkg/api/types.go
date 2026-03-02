@@ -36,10 +36,11 @@ type Artifact struct {
 	Port       int               `json:"port,omitempty"`
 	EnvVars    map[string]string `json:"env_vars,omitempty"`
 	Language   string            `json:"language,omitempty"`
-	Error      string            `json:"error,omitempty"`
-	CreatedAt  time.Time         `json:"created_at"`
-	UpdatedAt  time.Time         `json:"updated_at"`
-	StorageRef string            `json:"storage_ref,omitempty"`
+	StaticFiles string           `json:"static_files,omitempty"` // ConfigMap name for static content (skip build)
+	Error       string           `json:"error,omitempty"`
+	CreatedAt   time.Time        `json:"created_at"`
+	UpdatedAt   time.Time        `json:"updated_at"`
+	StorageRef  string           `json:"storage_ref,omitempty"`
 }
 
 // ArtifactSummary is a lightweight view of an artifact for list responses.

@@ -36,7 +36,7 @@ vibeD is a single Go binary that serves three concerns:
 │   v          v          v            │
 │ ┌──────┐ ┌──────┐ ┌─────────┐       │
 │ │Store │ │Build │ │Deployer │       │
-│ │      │ │packs │ │Factory  │       │
+│ │      │ │(ah)  │ │Factory  │       │
 │ └──────┘ └──────┘ └─┬───┬──┘       │
 │                      │   │           │
 │              ┌───────┘   └───────┐   │
@@ -60,6 +60,6 @@ vibeD is a single Go binary that serves three concerns:
 |-----------|-----------|-----------------|
 | **Store** | `ArtifactStore` | In-memory, ConfigMap (both support owner-scoped listing) |
 | **Storage** | `Storage` | Local filesystem, GitHub, GitLab, UserStorageRouter (per-user routing) |
-| **Builder** | `Builder` | Cloud Native Buildpacks (pack) |
+| **Builder** | `Builder` | Buildah (K8s Jobs) — auto-generates Dockerfiles per language |
 | **Deployer** | `Deployer` | Knative, Kubernetes, wasmCloud |
 | **Registry** | `Registry` | Any OCI-compatible registry |

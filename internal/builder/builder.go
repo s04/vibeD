@@ -17,6 +17,7 @@ import (
 type BuildRequest struct {
 	SourceDir string
 	ImageName string
+	Language  string            // "static", "nodejs", "python", "go", or "" for auto
 	Env       map[string]string
 	Publish   bool // Push to registry after build
 }

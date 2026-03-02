@@ -64,6 +64,12 @@ func (d *KnativeDeployer) Deploy(ctx context.Context, artifact *api.Artifact) (*
 }
 
 func (d *KnativeDeployer) Update(ctx context.Context, artifact *api.Artifact) (*DeployResult, error) {
+	// For static updates, recreate the service to pick up ConfigMap changes
+	if artifact.StaticFiles != "" {
+		_ = d.knClient.ServingV1().Services(d.namespace).Delete(ctx, artifact.Name, metav1.DeleteOptions{})
+		return d.Deploy(ctx, artifact)
+	}
+
 	existing, err := d.knClient.ServingV1().Services(d.namespace).Get(ctx, artifact.Name, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("getting existing Knative Service: %w", err)
@@ -89,6 +95,10 @@ func (d *KnativeDeployer) Delete(ctx context.Context, artifact *api.Artifact) er
 	err := d.knClient.ServingV1().Services(d.namespace).Delete(ctx, artifact.Name, metav1.DeleteOptions{})
 	if err != nil {
 		return fmt.Errorf("deleting Knative Service: %w", err)
+	}
+	// Clean up static ConfigMap if present
+	if artifact.StaticFiles != "" {
+		_ = d.k8sClientset.CoreV1().ConfigMaps(d.namespace).Delete(ctx, artifact.StaticFiles, metav1.DeleteOptions{})
 	}
 	return nil
 }
@@ -135,14 +145,44 @@ func (d *KnativeDeployer) GetLogs(ctx context.Context, artifact *api.Artifact, l
 func (d *KnativeDeployer) buildService(artifact *api.Artifact) *knservingv1.Service {
 	containers := []corev1.Container{
 		{
-			Image: artifact.ImageRef,
-			Env:   d.buildEnvVars(artifact),
+			Image:           artifact.ImageRef,
+			ImagePullPolicy: corev1.PullIfNotPresent,
+			Env:             d.buildEnvVars(artifact),
 		},
 	}
 
 	if artifact.Port > 0 {
 		containers[0].Ports = []corev1.ContainerPort{
 			{ContainerPort: int32(artifact.Port)},
+		}
+	}
+
+	var volumes []corev1.Volume
+
+	// Static files: mount ConfigMap as nginx html + config
+	if artifact.StaticFiles != "" {
+		containers[0].VolumeMounts = []corev1.VolumeMount{
+			{Name: "static-files", MountPath: "/usr/share/nginx/html"},
+			{Name: "nginx-conf", MountPath: "/etc/nginx/conf.d/default.conf", SubPath: "nginx.conf"},
+		}
+		volumes = []corev1.Volume{
+			{
+				Name: "static-files",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{Name: artifact.StaticFiles},
+					},
+				},
+			},
+			{
+				Name: "nginx-conf",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{Name: artifact.StaticFiles},
+						Items:                []corev1.KeyToPath{{Key: "nginx.conf", Path: "nginx.conf"}},
+					},
+				},
+			},
 		}
 	}
 
@@ -161,6 +201,7 @@ func (d *KnativeDeployer) buildService(artifact *api.Artifact) *knservingv1.Serv
 					Spec: knservingv1.RevisionSpec{
 						PodSpec: corev1.PodSpec{
 							Containers: containers,
+							Volumes:    volumes,
 						},
 					},
 				},

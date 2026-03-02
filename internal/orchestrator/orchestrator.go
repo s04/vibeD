@@ -18,6 +18,10 @@ import (
 	"github.com/maxkorbacher/vibed/internal/storage"
 	"github.com/maxkorbacher/vibed/internal/store"
 	"github.com/maxkorbacher/vibed/pkg/api"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 var dnsNameRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
@@ -58,6 +62,7 @@ type Orchestrator struct {
 	storage   storage.Storage
 	store     store.ArtifactStore
 	metrics   *metrics.Metrics
+	clientset kubernetes.Interface
 	imageBase string
 	logger    *slog.Logger
 }
@@ -71,6 +76,7 @@ func NewOrchestrator(
 	stg storage.Storage,
 	st store.ArtifactStore,
 	m *metrics.Metrics,
+	clientset kubernetes.Interface,
 	logger *slog.Logger,
 ) *Orchestrator {
 	imageBase := "vibed-artifacts"
@@ -86,6 +92,7 @@ func NewOrchestrator(
 		storage:   stg,
 		store:     st,
 		metrics:   m,
+		clientset: clientset,
 		imageBase: imageBase,
 		logger:    logger,
 	}
@@ -143,12 +150,22 @@ func (o *Orchestrator) Deploy(ctx context.Context, req DeployRequest) (*DeployRe
 	}
 	artifact.Target = target
 
-	// 6. Build container image
-	imageName := fmt.Sprintf("%s/%s:latest", o.imageBase, req.Name)
+	// 6. Detect language and check for static shortcut
 	lang := req.Language
-	if lang == "" {
-		lang = "auto"
+	if lang == "" || lang == "auto" {
+		lang = builder.DetectLanguage(req.Files)
 	}
+	artifact.Language = lang
+
+	// Static shortcut: skip build, use ConfigMap + nginx directly
+	if lang == "static" && isSmallStatic(req.Files) {
+		o.logger.Info("using static ConfigMap deploy (skipping build)",
+			"name", req.Name, "files", len(req.Files))
+		return o.deployStatic(ctx, artifact, req.Files, target)
+	}
+
+	// 7. Build container image (non-static path)
+	imageName := fmt.Sprintf("%s/%s:latest", o.imageBase, req.Name)
 
 	o.metrics.BuildsInFlight.Inc()
 	buildStart := time.Now()
@@ -156,6 +173,7 @@ func (o *Orchestrator) Deploy(ctx context.Context, req DeployRequest) (*DeployRe
 	buildResult, err := o.builder.Build(ctx, builder.BuildRequest{
 		SourceDir: storageRef.LocalPath,
 		ImageName: imageName,
+		Language:  lang,
 		Env:       req.EnvVars,
 		Publish:   o.cfg.Registry.Enabled,
 	})
@@ -174,7 +192,7 @@ func (o *Orchestrator) Deploy(ctx context.Context, req DeployRequest) (*DeployRe
 	o.metrics.BuildDuration.WithLabelValues("success", lang).Observe(buildDur)
 	artifact.ImageRef = buildResult.ImageRef
 
-	// 7. Deploy
+	// 8. Deploy
 	o.updateStatus(ctx, artifact, api.StatusDeploying)
 	dep, err := o.factory.Get(target)
 	if err != nil {
@@ -197,7 +215,7 @@ func (o *Orchestrator) Deploy(ctx context.Context, req DeployRequest) (*DeployRe
 	o.metrics.DeployDuration.WithLabelValues("success", string(target)).Observe(deployDur)
 	o.metrics.ArtifactsActive.WithLabelValues(string(target)).Inc()
 
-	// 8. Update artifact with URL and running status
+	// 9. Update artifact with URL and running status
 	artifact.URL = deployResult.URL
 	artifact.Status = api.StatusRunning
 	artifact.UpdatedAt = time.Now()
@@ -244,12 +262,21 @@ func (o *Orchestrator) Update(ctx context.Context, req UpdateRequest) (*DeployRe
 		artifact.EnvVars = req.EnvVars
 	}
 
-	// Rebuild
-	imageName := fmt.Sprintf("%s/%s:latest", o.imageBase, artifact.Name)
+	// Detect language for static shortcut
 	lang := artifact.Language
-	if lang == "" {
-		lang = "auto"
+	if lang == "" || lang == "auto" {
+		lang = builder.DetectLanguage(req.Files)
 	}
+	artifact.Language = lang
+
+	// Static shortcut: update ConfigMap directly, skip build
+	if lang == "static" && isSmallStatic(req.Files) {
+		o.logger.Info("using static ConfigMap update (skipping build)", "name", artifact.Name)
+		return o.updateStatic(ctx, artifact, req.Files)
+	}
+
+	// Rebuild (non-static path)
+	imageName := fmt.Sprintf("%s/%s:latest", o.imageBase, artifact.Name)
 
 	o.metrics.BuildsInFlight.Inc()
 	buildStart := time.Now()
@@ -257,6 +284,7 @@ func (o *Orchestrator) Update(ctx context.Context, req UpdateRequest) (*DeployRe
 	buildResult, err := o.builder.Build(ctx, builder.BuildRequest{
 		SourceDir: storageRef.LocalPath,
 		ImageName: imageName,
+		Language:  lang,
 		Env:       artifact.EnvVars,
 		Publish:   o.cfg.Registry.Enabled,
 	})
@@ -325,14 +353,14 @@ func (o *Orchestrator) Delete(ctx context.Context, artifactID string) error {
 		return err
 	}
 
-	dep, err := o.factory.Get(artifact.Target)
-	if err != nil {
-		o.metrics.DeletesTotal.WithLabelValues("failed").Inc()
-		return err
-	}
-
-	if err := dep.Delete(ctx, artifact); err != nil {
-		o.logger.Warn("failed to delete deployment", "id", artifactID, "error", err)
+	// Skip deployer cleanup if artifact never got a target (e.g. stuck in building)
+	if artifact.Target != "" {
+		dep, err := o.factory.Get(artifact.Target)
+		if err != nil {
+			o.logger.Warn("failed to get deployer for delete", "id", artifactID, "target", artifact.Target, "error", err)
+		} else if err := dep.Delete(ctx, artifact); err != nil {
+			o.logger.Warn("failed to delete deployment", "id", artifactID, "error", err)
+		}
 	}
 
 	if err := o.storage.Delete(ctx, artifactID); err != nil {
@@ -444,4 +472,181 @@ func generateID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("%x", b)
+}
+
+const staticNginxConf = `server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html index.htm;
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+`
+
+// isSmallStatic returns true if total file content fits in a ConfigMap (< 900KB).
+func isSmallStatic(files map[string]string) bool {
+	total := 0
+	for _, content := range files {
+		total += len(content)
+	}
+	return total < 900*1024
+}
+
+// deployStatic creates a ConfigMap with files + nginx config, then deploys nginx directly.
+func (o *Orchestrator) deployStatic(ctx context.Context, artifact *api.Artifact, files map[string]string, target api.DeploymentTarget) (*DeployResult, error) {
+	cmName := fmt.Sprintf("vibed-static-%s", artifact.Name)
+	ns := o.cfg.Deployment.Namespace
+
+	// Build ConfigMap data: user files + nginx config
+	data := make(map[string]string, len(files)+1)
+	for k, v := range files {
+		data[k] = v
+	}
+	data["nginx.conf"] = staticNginxConf
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cmName,
+			Namespace: ns,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "vibed",
+				"vibed.dev/artifact-id":        artifact.ID,
+			},
+		},
+		Data: data,
+	}
+
+	_, err := o.clientset.CoreV1().ConfigMaps(ns).Create(ctx, cm, metav1.CreateOptions{})
+	if err != nil {
+		o.failArtifact(ctx, artifact, fmt.Sprintf("creating static ConfigMap: %v", err))
+		return nil, fmt.Errorf("creating static ConfigMap: %w", err)
+	}
+
+	// Set artifact fields for static deploy
+	artifact.ImageRef = "nginx:alpine"
+	artifact.StaticFiles = cmName
+	if artifact.Port == 0 {
+		artifact.Port = 8080
+	}
+
+	// Deploy
+	o.updateStatus(ctx, artifact, api.StatusDeploying)
+	dep, err := o.factory.Get(target)
+	if err != nil {
+		o.failArtifact(ctx, artifact, fmt.Sprintf("no deployer for target: %v", err))
+		return nil, err
+	}
+
+	deployStart := time.Now()
+	deployResult, err := dep.Deploy(ctx, artifact)
+	deployDur := time.Since(deployStart).Seconds()
+
+	if err != nil {
+		o.metrics.DeploysTotal.WithLabelValues("failed", string(target)).Inc()
+		o.metrics.DeployDuration.WithLabelValues("failed", string(target)).Observe(deployDur)
+		o.failArtifact(ctx, artifact, fmt.Sprintf("deploy failed: %v", err))
+		return nil, &api.ErrDeployFailed{Reason: err.Error()}
+	}
+
+	o.metrics.DeploysTotal.WithLabelValues("success", string(target)).Inc()
+	o.metrics.DeployDuration.WithLabelValues("success", string(target)).Observe(deployDur)
+	o.metrics.ArtifactsActive.WithLabelValues(string(target)).Inc()
+
+	artifact.URL = deployResult.URL
+	artifact.Status = api.StatusRunning
+	artifact.UpdatedAt = time.Now()
+	_ = o.store.Update(ctx, artifact)
+
+	o.logger.Info("static artifact deployed (no build)",
+		"id", artifact.ID, "name", artifact.Name,
+		"target", target, "url", deployResult.URL)
+
+	return &DeployResult{
+		ArtifactID: artifact.ID,
+		Name:       artifact.Name,
+		URL:        deployResult.URL,
+		Target:     string(target),
+		Status:     string(api.StatusRunning),
+		ImageRef:   "nginx:alpine",
+	}, nil
+}
+
+// updateStatic replaces the ConfigMap and triggers a redeployment for static artifacts.
+func (o *Orchestrator) updateStatic(ctx context.Context, artifact *api.Artifact, files map[string]string) (*DeployResult, error) {
+	cmName := artifact.StaticFiles
+	if cmName == "" {
+		cmName = fmt.Sprintf("vibed-static-%s", artifact.Name)
+	}
+	ns := o.cfg.Deployment.Namespace
+
+	// Build new ConfigMap data
+	data := make(map[string]string, len(files)+1)
+	for k, v := range files {
+		data[k] = v
+	}
+	data["nginx.conf"] = staticNginxConf
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cmName,
+			Namespace: ns,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "vibed",
+				"vibed.dev/artifact-id":        artifact.ID,
+			},
+		},
+		Data: data,
+	}
+
+	// Replace ConfigMap (delete + create for clean update)
+	_ = o.clientset.CoreV1().ConfigMaps(ns).Delete(ctx, cmName, metav1.DeleteOptions{})
+	_, err := o.clientset.CoreV1().ConfigMaps(ns).Create(ctx, cm, metav1.CreateOptions{})
+	if err != nil {
+		o.failArtifact(ctx, artifact, fmt.Sprintf("updating static ConfigMap: %v", err))
+		return nil, fmt.Errorf("updating static ConfigMap: %w", err)
+	}
+
+	artifact.ImageRef = "nginx:alpine"
+	artifact.StaticFiles = cmName
+	if artifact.Port == 0 {
+		artifact.Port = 8080
+	}
+
+	// Redeploy
+	o.updateStatus(ctx, artifact, api.StatusDeploying)
+	dep, err := o.factory.Get(artifact.Target)
+	if err != nil {
+		return nil, err
+	}
+
+	target := string(artifact.Target)
+	deployStart := time.Now()
+	deployResult, err := dep.Update(ctx, artifact)
+	deployDur := time.Since(deployStart).Seconds()
+
+	if err != nil {
+		o.metrics.DeploysTotal.WithLabelValues("failed", target).Inc()
+		o.metrics.DeployDuration.WithLabelValues("failed", target).Observe(deployDur)
+		o.failArtifact(ctx, artifact, fmt.Sprintf("deploy failed: %v", err))
+		return nil, &api.ErrDeployFailed{Reason: err.Error()}
+	}
+
+	o.metrics.DeploysTotal.WithLabelValues("success", target).Inc()
+	o.metrics.DeployDuration.WithLabelValues("success", target).Observe(deployDur)
+
+	artifact.URL = deployResult.URL
+	artifact.Status = api.StatusRunning
+	artifact.UpdatedAt = time.Now()
+	_ = o.store.Update(ctx, artifact)
+
+	return &DeployResult{
+		ArtifactID: artifact.ID,
+		Name:       artifact.Name,
+		URL:        deployResult.URL,
+		Target:     target,
+		Status:     string(api.StatusRunning),
+		ImageRef:   "nginx:alpine",
+	}, nil
 }

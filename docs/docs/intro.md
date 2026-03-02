@@ -29,7 +29,7 @@ AI Coding Tool (Claude, Gemini, etc.)
     └────┬────┘
          |
     ┌────┴────┐
-    │ Build   │  ← Cloud Native Buildpacks
+    │ Build   │  ← Buildah (in-cluster Jobs)
     └────┬────┘
          |
     ┌────┴──────────────┐
@@ -44,7 +44,7 @@ AI Coding Tool (Claude, Gemini, etc.)
 
 - **MCP Server** - 7 tools for deploying, managing, and monitoring artifacts
 - **Auto-detection** - Automatically picks the best deployment target
-- **Buildpacks** - No Dockerfile needed, auto-detects language and framework
+- **Buildah builder** - Auto-generates Dockerfiles, builds container images in-cluster via Kubernetes Jobs (no Docker socket required)
 - **Dashboard** - Web UI showing all deployed artifacts with status and URLs
 - **Multiple storage backends** - Local filesystem or GitHub repository
 - **Container registry** - Push/pull images to any OCI-compatible registry

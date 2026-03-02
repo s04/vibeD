@@ -99,9 +99,11 @@ config:
     preferredTarget: "auto"
     namespace: "vibed-artifacts"
   builder:
-    image: "paketobuildpacks/builder-jammy-base:latest"
-    pullPolicy: "if-not-present"
-    containerRuntime: "auto"
+    engine: "buildah"
+    buildah:
+      image: "quay.io/buildah/stable:latest"
+      timeout: "10m"
+      insecure: false            # Set true for in-cluster HTTP registries
   storage:
     backend: "local"
     local:
@@ -166,7 +168,7 @@ For automated certificate management with cert-manager, see [Authentication & HT
 
 ### Registry Credentials
 
-If your artifact registry requires authentication, create an image pull secret and configure Docker credentials for buildpacks:
+If your artifact registry requires authentication, create an image pull secret and configure Docker credentials for Buildah builds:
 
 ```bash
 # For pulling the vibeD image itself
@@ -176,7 +178,7 @@ kubectl create secret docker-registry vibed-registry \
   --docker-username=USERNAME \
   --docker-password=TOKEN
 
-# For buildpacks to push artifact images
+# For Buildah Jobs to push artifact images
 kubectl create secret generic docker-config \
   --namespace vibed-system \
   --from-file=config.json=$HOME/.docker/config.json
@@ -264,7 +266,7 @@ kubectl get svc vibed -n vibed-system -o jsonpath='{.status.loadBalancer.ingress
 
 ## Step 7: Container Registry Access
 
-vibeD needs push access to a container registry for buildpacks output. Inside the pod, it uses the standard Docker credential chain.
+vibeD needs push access to a container registry for Buildah build output. The Buildah Jobs push images directly to the registry.
 
 ### Cloud Workload Identity (Recommended)
 
@@ -287,7 +289,7 @@ vibeD defaults to a single replica. Before scaling, consider:
 - **PVC Access Mode**: The default `ReadWriteOnce` PVC cannot be shared across replicas on most storage classes.
   - For multi-replica HA, use a `ReadWriteMany` storage class (NFS, EFS, Azure Files) or switch to a Git-based storage backend (GitHub/GitLab).
   - See [Storage Backends](../configuration/storage.md) for Git-backed storage options.
-- **Build Resources**: Buildpacks builds are CPU and memory intensive. Size resource limits based on expected concurrent builds.
+- **Build Resources**: Buildah build Jobs are CPU and memory intensive. Size resource limits based on expected concurrent builds.
 - **Artifact Scaling**: Knative auto-scales deployed artifacts independently from vibeD itself.
 
 ## Upgrading

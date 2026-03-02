@@ -49,6 +49,44 @@ func (d *KubernetesDeployer) Deploy(ctx context.Context, artifact *api.Artifact)
 		"vibed.dev/artifact-id":        artifact.ID,
 	}
 
+	// Build container spec
+	container := corev1.Container{
+		Name:            "app",
+		Image:           artifact.ImageRef,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Ports:           []corev1.ContainerPort{{ContainerPort: int32(port)}},
+		Env:             buildEnvVars(artifact),
+	}
+
+	var volumes []corev1.Volume
+
+	// Static files: mount ConfigMap as nginx html + config
+	if artifact.StaticFiles != "" {
+		container.VolumeMounts = []corev1.VolumeMount{
+			{Name: "static-files", MountPath: "/usr/share/nginx/html"},
+			{Name: "nginx-conf", MountPath: "/etc/nginx/conf.d/default.conf", SubPath: "nginx.conf"},
+		}
+		volumes = []corev1.Volume{
+			{
+				Name: "static-files",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{Name: artifact.StaticFiles},
+					},
+				},
+			},
+			{
+				Name: "nginx-conf",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{Name: artifact.StaticFiles},
+						Items:                []corev1.KeyToPath{{Key: "nginx.conf", Path: "nginx.conf"}},
+					},
+				},
+			},
+		}
+	}
+
 	// Create Deployment
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -64,14 +102,8 @@ func (d *KubernetesDeployer) Deploy(ctx context.Context, artifact *api.Artifact)
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  "app",
-							Image: artifact.ImageRef,
-							Ports: []corev1.ContainerPort{{ContainerPort: int32(port)}},
-							Env:   buildEnvVars(artifact),
-						},
-					},
+					Containers: []corev1.Container{container},
+					Volumes:    volumes,
 				},
 			},
 		},
@@ -145,6 +177,10 @@ func (d *KubernetesDeployer) Delete(ctx context.Context, artifact *api.Artifact)
 	err = d.clientset.CoreV1().Services(d.namespace).Delete(ctx, artifact.Name, metav1.DeleteOptions{})
 	if err != nil {
 		return fmt.Errorf("deleting Service: %w", err)
+	}
+	// Clean up static ConfigMap if present
+	if artifact.StaticFiles != "" {
+		_ = d.clientset.CoreV1().ConfigMaps(d.namespace).Delete(ctx, artifact.StaticFiles, metav1.DeleteOptions{})
 	}
 	return nil
 }

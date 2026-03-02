@@ -46,12 +46,13 @@ The response includes per-component status. Fix the failing component:
 
 ### Builder Image Pull Failure
 
-**Symptom:** Build hangs or fails with timeout pulling `paketobuildpacks/builder-jammy-base`.
+**Symptom:** Build Job hangs or fails with timeout pulling `quay.io/buildah/stable:latest`.
 
 **Fixes:**
-- Ensure the cluster has internet access or pre-pull the builder image
-- Use a registry mirror: set `config.builder.image` to a mirrored copy
+- Ensure the cluster has internet access or pre-pull the Buildah image
+- Use a registry mirror: set `config.builder.buildah.image` to a mirrored copy
 - If behind a proxy, configure the container runtime's proxy settings
+- For Kind clusters: `docker pull quay.io/buildah/stable:latest && kind load docker-image quay.io/buildah/stable:latest`
 
 ### Registry Push Authentication Failure
 
@@ -65,9 +66,9 @@ The response includes per-component status. Fix the failing component:
 
 ### Build Runs Out of Memory
 
-**Symptom:** Build pod is OOMKilled during buildpacks execution.
+**Symptom:** Build Job pod is OOMKilled during Buildah execution.
 
-The default memory limit is 512Mi, but buildpacks can use 1-2Gi depending on the project.
+The default memory limit is 512Mi, but Buildah with VFS storage driver can use 1-2Gi depending on the project.
 
 **Fix:** Increase the memory limit in your Helm values:
 

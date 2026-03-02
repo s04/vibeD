@@ -38,15 +38,21 @@ config:
     preferredTarget: "auto"
     namespace: "default"
   builder:
+    engine: "buildah"
     image: "paketobuildpacks/builder-jammy-base:latest"
     pullPolicy: "if-not-present"
     containerRuntime: "auto"
+    buildah:
+      image: "quay.io/buildah/stable:latest"
+      timeout: "10m"
+      insecure: false
   storage:
     backend: "local"
     local:
       basePath: "/data/vibed/artifacts"
   registry:
-    enabled: false
+    enabled: true
+    url: "kind-registry:5000"
   store:
     backend: "configmap"
     configmap:

@@ -49,6 +49,6 @@ The primary tool for deploying web artifacts to the cluster.
 1. **Validates** the name (DNS-safe, unique)
 2. **Stores** source files to the configured storage backend
 3. **Detects** the best deployment target
-4. **Builds** a container image using Cloud Native Buildpacks
+4. **Builds** a container image using Buildah (runs as a Kubernetes Job)
 5. **Deploys** to the cluster (Knative Service, K8s Deployment, or OAM App)
 6. **Returns** the access URL and artifact metadata

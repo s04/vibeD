@@ -8,7 +8,9 @@ Deploy your first artifact using vibeD's MCP tools.
 
 ## Using Claude Desktop
 
-1. Add vibeD as an MCP server in your Claude Desktop config:
+### Option A: Stdio Transport (Direct)
+
+Run vibeD as a local process that Claude Desktop launches directly:
 
 ```json
 {
@@ -21,11 +23,34 @@ Deploy your first artifact using vibeD's MCP tools.
 }
 ```
 
-2. Ask Claude to deploy a simple website:
+### Option B: HTTP Transport (Remote / In-Cluster)
+
+If vibeD runs as a service (e.g. deployed to your Kind cluster), use `mcp-remote` to bridge Claude Desktop's stdio to vibeD's HTTP endpoint:
+
+```json
+{
+  "mcpServers": {
+    "vibed": {
+      "command": "npx",
+      "args": ["mcp-remote", "http://localhost:8080/mcp/"]
+    }
+  }
+}
+```
+
+This requires a port-forward to the vibeD service:
+
+```bash
+kubectl port-forward svc/vibed 8080:8080 -n vibed-system
+```
+
+### Deploy Your First Artifact
+
+Ask Claude to deploy a simple website:
 
 > "Create a simple portfolio website with my name and deploy it using vibeD"
 
-Claude will use the `deploy_artifact` tool automatically to build and deploy the site.
+Claude will use the `deploy_artifact` tool automatically. Static HTML/CSS/JS files deploy instantly via ConfigMap (no container build needed). More complex apps (Node.js, Python, Go) are built via Buildah.
 
 ## Using MCP Inspector
 
@@ -48,12 +73,18 @@ Then call the `deploy_artifact` tool with:
 
 ## Using the HTTP API
 
-If vibeD is running in HTTP mode, you can also use the MCP HTTP endpoint:
+If vibeD is running in HTTP mode, you can call the MCP endpoint directly via Streamable HTTP:
 
 ```bash
+# 1. Initialize session
 curl -X POST http://localhost:8080/mcp/ \
   -H "Content-Type: application/json" \
-  -d '...'
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+    "protocolVersion":"2025-03-26","capabilities":{},
+    "clientInfo":{"name":"curl","version":"1.0"}}}'
+
+# 2. Use the Mcp-Session-Id header from the response for subsequent calls
 ```
 
 ## Check the Dashboard

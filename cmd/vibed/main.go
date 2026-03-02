@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	vibedauth "github.com/maxkorbacher/vibed/internal/auth"
@@ -76,7 +77,30 @@ func main() {
 	// Initialize subsystems
 	detector := environment.NewDetector(k8sClients, logger)
 
-	bldr := builder.NewPackBuilder(cfg.Builder, logger)
+	var bldr builder.Builder
+	switch cfg.Builder.Engine {
+	case "pack":
+		bldr = builder.NewPackBuilder(cfg.Builder, logger)
+	case "buildah", "":
+		ns := cfg.Builder.Buildah.Namespace
+		if ns == "" {
+			ns = cfg.Deployment.Namespace
+		}
+		pvcName := cfg.Builder.Buildah.PVCName
+		if pvcName == "" {
+			pvcName = "vibed-data"
+		}
+		// PVC mount point is the parent of the storage base path
+		// (e.g. /data/vibed when basePath is /data/vibed/artifacts)
+		pvcMountPath := filepath.Dir(cfg.Storage.Local.BasePath)
+		bldr = builder.NewBuildahBuilder(
+			k8sClients.Clientset, cfg.Builder.Buildah, cfg.Registry,
+			ns, pvcName, pvcMountPath, logger,
+		)
+	default:
+		logger.Error("unsupported builder engine", "engine", cfg.Builder.Engine)
+		os.Exit(1)
+	}
 
 	// Initialize storage
 	checker.SetNotReady("storage", "initializing")
@@ -165,7 +189,7 @@ func main() {
 	factory.Register(api.TargetWasmCloud, wasmDeployer)
 
 	// Create orchestrator
-	orch := orchestrator.NewOrchestrator(cfg, detector, bldr, factory, stg, st, m, logger)
+	orch := orchestrator.NewOrchestrator(cfg, detector, bldr, factory, stg, st, m, k8sClients.Clientset, logger)
 
 	// Create MCP server
 	mcpServer := mcppkg.NewServer(orch)

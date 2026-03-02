@@ -29,7 +29,7 @@ deploy_artifact called
          │ Store source files
          ▼
     ┌──────────┐
-    │ building │  ← Buildpacks create container image
+    │ building │  ← Buildah Job creates container image
     └────┬─────┘
          │ Image ready
          ▼

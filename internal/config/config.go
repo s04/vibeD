@@ -80,10 +80,21 @@ type DeploymentConfig struct {
 }
 
 type BuilderConfig struct {
-	Image            string `yaml:"image"`
-	RunImage         string `yaml:"runImage"`
-	PullPolicy       string `yaml:"pullPolicy"`
-	ContainerRuntime string `yaml:"containerRuntime"` // "auto", "docker", "podman"
+	Engine           string        `yaml:"engine"`           // "pack" or "buildah" (default: "buildah")
+	Image            string        `yaml:"image"`            // buildpacks builder image (pack only)
+	RunImage         string        `yaml:"runImage"`
+	PullPolicy       string        `yaml:"pullPolicy"`
+	ContainerRuntime string        `yaml:"containerRuntime"` // "auto", "docker", "podman"
+	Buildah          BuildahConfig `yaml:"buildah"`
+}
+
+// BuildahConfig configures the Buildah in-cluster builder.
+type BuildahConfig struct {
+	Image     string `yaml:"image"`     // Buildah executor image (default: "quay.io/buildah/stable:latest")
+	Namespace string `yaml:"namespace"` // Namespace for build Jobs (default: deployment.namespace)
+	PVCName   string `yaml:"pvcName"`   // PVC name for shared source (default: auto from Helm)
+	Timeout   string `yaml:"timeout"`   // Build timeout (default: "10m")
+	Insecure  bool   `yaml:"insecure"`  // Use --tls-verify=false for non-TLS registries
 }
 
 type StorageConfig struct {
@@ -149,9 +160,14 @@ func Default() *Config {
 			Namespace:       "default",
 		},
 		Builder: BuilderConfig{
+			Engine:           "buildah",
 			Image:            "paketobuildpacks/builder-jammy-base:latest",
 			PullPolicy:       "if-not-present",
 			ContainerRuntime: "auto",
+			Buildah: BuildahConfig{
+				Image:   "quay.io/buildah/stable:latest",
+				Timeout: "10m",
+			},
 		},
 		Storage: StorageConfig{
 			Backend: "local",
@@ -227,8 +243,17 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("VIBED_BUILDER_IMAGE"); v != "" {
 		cfg.Builder.Image = v
 	}
+	if v := os.Getenv("VIBED_BUILDER_ENGINE"); v != "" {
+		cfg.Builder.Engine = v
+	}
 	if v := os.Getenv("VIBED_BUILDER_CONTAINER_RUNTIME"); v != "" {
 		cfg.Builder.ContainerRuntime = v
+	}
+	if v := os.Getenv("VIBED_BUILDER_BUILDAH_IMAGE"); v != "" {
+		cfg.Builder.Buildah.Image = v
+	}
+	if v := os.Getenv("VIBED_BUILDER_BUILDAH_INSECURE"); v != "" {
+		cfg.Builder.Buildah.Insecure, _ = strconv.ParseBool(v)
 	}
 	if v := os.Getenv("VIBED_STORAGE_BACKEND"); v != "" {
 		cfg.Storage.Backend = v
@@ -323,6 +348,15 @@ func validate(cfg *Config) error {
 	validStoreBackends := map[string]bool{"memory": true, "configmap": true}
 	if !validStoreBackends[cfg.Store.Backend] {
 		return fmt.Errorf("store.backend must be one of: memory, configmap (got %q)", cfg.Store.Backend)
+	}
+
+	validEngines := map[string]bool{"pack": true, "buildah": true}
+	if !validEngines[cfg.Builder.Engine] {
+		return fmt.Errorf("builder.engine must be one of: pack, buildah (got %q)", cfg.Builder.Engine)
+	}
+
+	if cfg.Builder.Engine == "buildah" && !cfg.Registry.Enabled {
+		return fmt.Errorf("registry must be enabled when using buildah builder (buildah needs a registry to push images)")
 	}
 
 	if cfg.Registry.Enabled && cfg.Registry.URL == "" {

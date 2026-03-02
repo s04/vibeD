@@ -12,6 +12,10 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "watch", "create", "update", "delete"]
+  # Build jobs (Buildah)
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
   # Knative Serving
   - apiGroups: ["serving.knative.dev"]
     resources: ["services"]

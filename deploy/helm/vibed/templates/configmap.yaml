@@ -29,15 +29,25 @@ data:
       preferredTarget: {{ .Values.config.deployment.preferredTarget | quote }}
       namespace: {{ .Values.config.deployment.namespace | quote }}
     builder:
+      engine: {{ .Values.config.builder.engine | quote }}
       image: {{ .Values.config.builder.image | quote }}
       pullPolicy: {{ .Values.config.builder.pullPolicy | quote }}
       containerRuntime: {{ .Values.config.builder.containerRuntime | quote }}
+      {{- if eq .Values.config.builder.engine "buildah" }}
+      buildah:
+        image: {{ .Values.config.builder.buildah.image | quote }}
+        timeout: {{ .Values.config.builder.buildah.timeout | quote }}
+        insecure: {{ .Values.config.builder.buildah.insecure }}
+      {{- end }}
     storage:
       backend: {{ .Values.config.storage.backend | quote }}
       local:
         basePath: {{ .Values.config.storage.local.basePath | quote }}
     registry:
       enabled: {{ .Values.config.registry.enabled }}
+      {{- if .Values.config.registry.url }}
+      url: {{ .Values.config.registry.url | quote }}
+      {{- end }}
     store:
       backend: {{ .Values.config.store.backend | quote }}
       configmap:
