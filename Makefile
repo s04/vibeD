@@ -3,8 +3,8 @@ BINARY := bin/vibed
 KIND_CLUSTER := vibed-dev
 KNATIVE_VERSION := v1.17.0
 
-.PHONY: build run test clean setup-cluster install-knative install-deps dev teardown lint \
-       test-integration test-integration-short test-integration-setup test-cleanup
+.PHONY: build run test clean setup-cluster install-knative setup-registry install-deps dev teardown lint \
+       test-integration test-integration-short test-integration-setup test-cleanup image load-image
 
 ## Build
 
@@ -89,8 +89,21 @@ install-knative:
 		--type merge -p '{"data":{"127.0.0.1.sslip.io":""}}'
 	kubectl patch service kourier -n kourier-system \
 		--type merge -p '{"spec":{"type":"NodePort","ports":[{"name":"http2","port":80,"targetPort":8080,"nodePort":31080,"protocol":"TCP"}]}}'
+	kubectl patch configmap/config-deployment -n knative-serving \
+		--type merge -p '{"data":{"registries-skipping-tag-resolving":"kind-registry:5000"}}'
 
-install-deps: install-knative
+setup-registry:
+	kubectl apply -f deploy/kind/registry.yaml
+	kubectl wait --for=condition=Available deployment/kind-registry -n default --timeout=60s
+	$(eval REGISTRY_IP := $(shell kubectl get svc kind-registry -n default -o jsonpath='{.spec.clusterIP}'))
+	docker exec $(KIND_CLUSTER)-control-plane mkdir -p /etc/containerd/certs.d/kind-registry:5000
+	docker exec $(KIND_CLUSTER)-control-plane sh -c 'echo "server = \"http://$(REGISTRY_IP):5000\"\n[host.\"http://$(REGISTRY_IP):5000\"]\n  capabilities = [\"pull\", \"resolve\"]\n  skip_verify = true" > /etc/containerd/certs.d/kind-registry:5000/hosts.toml'
+	docker exec $(KIND_CLUSTER)-control-plane sh -c 'grep -q "config_path" /etc/containerd/config.toml || echo "\n[plugins.\"io.containerd.grpc.v1.cri\".registry]\n  config_path = \"/etc/containerd/certs.d\"" >> /etc/containerd/config.toml'
+	docker exec $(KIND_CLUSTER)-control-plane systemctl restart containerd
+	kubectl create namespace vibed-system --dry-run=client -o yaml | kubectl apply -f -
+	kubectl apply -f deploy/kind/registry-external.yaml
+
+install-deps: install-knative setup-registry
 
 dev: setup-cluster install-deps build
 	@echo "Development environment ready."
