@@ -4,7 +4,11 @@ import './ArtifactCard.css'
 
 interface Props {
   artifact: ArtifactSummary
+  currentUser: string
+  isAdmin: boolean
   onViewLogs: () => void
+  onViewVersions: () => void
+  onShare: () => void
   onDelete: () => Promise<void>
 }
 
@@ -34,10 +38,15 @@ function timeAgo(dateStr: string): string {
   return `${days}d ago`
 }
 
-export default function ArtifactCard({ artifact, onViewLogs, onDelete }: Props) {
+export default function ArtifactCard({ artifact, currentUser, isAdmin, onViewLogs, onViewVersions, onShare, onDelete }: Props) {
   const status = statusConfig[artifact.status] ?? statusConfig.pending
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
+
+  const isOwner = !currentUser || artifact.owner_id === currentUser
+  const isShared = artifact.shared_with?.includes(currentUser) ?? false
+  const canWrite = isOwner || isAdmin
+  const showOwner = !isOwner && (isAdmin || isShared)
 
   const handleDelete = async () => {
     setDeleting(true)
@@ -58,6 +67,18 @@ export default function ArtifactCard({ artifact, onViewLogs, onDelete }: Props) 
             <span className="status-dot" style={{ background: status.color }} />
             {status.label}
           </span>
+          {artifact.version > 0 && (
+            <span className="version-badge">v{artifact.version}</span>
+          )}
+          {showOwner && artifact.owner_id && (
+            <span className="owner-badge">{artifact.owner_id}</span>
+          )}
+          {isShared && !isOwner && !isAdmin && (
+            <span className="shared-badge">shared</span>
+          )}
+          {artifact.shared_with && artifact.shared_with.length > 0 && isOwner && (
+            <span className="shared-badge">shared ({artifact.shared_with.length})</span>
+          )}
         </div>
         <span className="card-target">{targetLabels[artifact.target] ?? artifact.target}</span>
       </div>
@@ -88,7 +109,7 @@ export default function ArtifactCard({ artifact, onViewLogs, onDelete }: Props) 
                 onClick={handleDelete}
                 disabled={deleting}
               >
-                {deleting ? 'Deleting...' : 'Yes'}
+                {deleting ? '...' : 'Yes'}
               </button>
               <button
                 className="action-btn"
@@ -100,9 +121,15 @@ export default function ArtifactCard({ artifact, onViewLogs, onDelete }: Props) 
             </div>
           ) : (
             <>
-              <button className="action-btn action-danger-outline" onClick={() => setConfirmDelete(true)}>
-                Delete
-              </button>
+              {canWrite && (
+                <button className="action-btn action-danger-outline" onClick={() => setConfirmDelete(true)}>
+                  Delete
+                </button>
+              )}
+              {canWrite && (
+                <button className="action-btn" onClick={onShare}>Share</button>
+              )}
+              <button className="action-btn" onClick={onViewVersions}>Versions</button>
               <button className="action-btn" onClick={onViewLogs}>Logs</button>
               {artifact.url && (
                 <a href={artifact.url} target="_blank" rel="noopener noreferrer" className="action-btn action-primary">

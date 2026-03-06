@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/maxkorbacher/vibed/pkg/api"
@@ -16,19 +18,22 @@ import (
 
 // ConfigMapStore persists artifact metadata in a Kubernetes ConfigMap.
 // Each artifact is stored as a JSON entry keyed by its ID.
+// Versions are stored in a separate ConfigMap named "{name}-versions".
 type ConfigMapStore struct {
-	client    kubernetes.Interface
-	name      string
-	namespace string
-	mu        sync.Mutex
+	client       kubernetes.Interface
+	name         string
+	versionsName string // e.g. "vibed-artifacts-versions"
+	namespace    string
+	mu           sync.Mutex
 }
 
 // NewConfigMapStore creates a ConfigMap-backed artifact store.
 func NewConfigMapStore(client kubernetes.Interface, name, namespace string) *ConfigMapStore {
 	return &ConfigMapStore{
-		client:    client,
-		name:      name,
-		namespace: namespace,
+		client:       client,
+		name:         name,
+		versionsName: name + "-versions",
+		namespace:    namespace,
 	}
 }
 
@@ -36,7 +41,7 @@ func (s *ConfigMapStore) Create(ctx context.Context, artifact *api.Artifact) err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cm, err := s.getOrCreateConfigMap(ctx)
+	cm, err := s.getOrCreateConfigMap(ctx, s.name)
 	if err != nil {
 		return err
 	}
@@ -66,7 +71,7 @@ func (s *ConfigMapStore) Get(ctx context.Context, id string) (*api.Artifact, err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cm, err := s.getConfigMap(ctx)
+	cm, err := s.getConfigMap(ctx, s.name)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +92,7 @@ func (s *ConfigMapStore) GetByName(ctx context.Context, name string) (*api.Artif
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cm, err := s.getConfigMap(ctx)
+	cm, err := s.getConfigMap(ctx, s.name)
 	if err != nil {
 		return nil, err
 	}
@@ -101,11 +106,11 @@ func (s *ConfigMapStore) GetByName(ctx context.Context, name string) (*api.Artif
 	return nil, &api.ErrNotFound{ArtifactID: name}
 }
 
-func (s *ConfigMapStore) List(ctx context.Context, statusFilter string, ownerID string) ([]api.ArtifactSummary, error) {
+func (s *ConfigMapStore) List(ctx context.Context, statusFilter string, ownerID string, adminView bool) ([]api.ArtifactSummary, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cm, err := s.getConfigMap(ctx)
+	cm, err := s.getConfigMap(ctx, s.name)
 	if err != nil {
 		// If ConfigMap doesn't exist yet, return empty list
 		if k8serrors.IsNotFound(err) {
@@ -123,8 +128,12 @@ func (s *ConfigMapStore) List(ctx context.Context, statusFilter string, ownerID 
 		if statusFilter != "" && statusFilter != "all" && string(artifact.Status) != statusFilter {
 			continue
 		}
-		if ownerID != "" && artifact.OwnerID != ownerID {
-			continue
+		if !adminView && ownerID != "" {
+			isOwner := artifact.OwnerID == ownerID
+			isShared := slices.Contains(artifact.SharedWith, ownerID)
+			if !isOwner && !isShared {
+				continue
+			}
 		}
 		summaries = append(summaries, artifact.ToSummary())
 	}
@@ -135,7 +144,7 @@ func (s *ConfigMapStore) Update(ctx context.Context, artifact *api.Artifact) err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cm, err := s.getConfigMap(ctx)
+	cm, err := s.getConfigMap(ctx, s.name)
 	if err != nil {
 		return err
 	}
@@ -157,7 +166,7 @@ func (s *ConfigMapStore) Delete(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cm, err := s.getConfigMap(ctx)
+	cm, err := s.getConfigMap(ctx, s.name)
 	if err != nil {
 		return err
 	}
@@ -167,15 +176,106 @@ func (s *ConfigMapStore) Delete(ctx context.Context, id string) error {
 	}
 
 	delete(cm.Data, id)
+
+	// Clean up version entries
+	vcm, verr := s.getConfigMap(ctx, s.versionsName)
+	if verr == nil && vcm.Data != nil {
+		prefix := id + "-v"
+		for key := range vcm.Data {
+			if strings.HasPrefix(key, prefix) {
+				delete(vcm.Data, key)
+			}
+		}
+		_ = s.updateConfigMap(ctx, vcm)
+	}
+
 	return s.updateConfigMap(ctx, cm)
 }
 
-func (s *ConfigMapStore) getConfigMap(ctx context.Context) (*corev1.ConfigMap, error) {
-	return s.client.CoreV1().ConfigMaps(s.namespace).Get(ctx, s.name, metav1.GetOptions{})
+func (s *ConfigMapStore) CreateVersion(ctx context.Context, version *api.ArtifactVersion) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cm, err := s.getOrCreateConfigMap(ctx, s.versionsName)
+	if err != nil {
+		return err
+	}
+
+	data, err := json.Marshal(version)
+	if err != nil {
+		return fmt.Errorf("marshaling version: %w", err)
+	}
+
+	key := fmt.Sprintf("%s-v%d", version.ArtifactID, version.Version)
+	if cm.Data == nil {
+		cm.Data = make(map[string]string)
+	}
+	cm.Data[key] = string(data)
+
+	return s.updateConfigMap(ctx, cm)
 }
 
-func (s *ConfigMapStore) getOrCreateConfigMap(ctx context.Context) (*corev1.ConfigMap, error) {
-	cm, err := s.getConfigMap(ctx)
+func (s *ConfigMapStore) ListVersions(ctx context.Context, artifactID string) ([]api.ArtifactVersion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cm, err := s.getConfigMap(ctx, s.versionsName)
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	prefix := artifactID + "-v"
+	var versions []api.ArtifactVersion
+	for key, v := range cm.Data {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		var ver api.ArtifactVersion
+		if err := json.Unmarshal([]byte(v), &ver); err != nil {
+			continue
+		}
+		versions = append(versions, ver)
+	}
+
+	// Sort by version number ascending
+	slices.SortFunc(versions, func(a, b api.ArtifactVersion) int {
+		return a.Version - b.Version
+	})
+
+	return versions, nil
+}
+
+func (s *ConfigMapStore) GetVersion(ctx context.Context, artifactID string, version int) (*api.ArtifactVersion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cm, err := s.getConfigMap(ctx, s.versionsName)
+	if err != nil {
+		return nil, &api.ErrVersionNotFound{ArtifactID: artifactID, Version: version}
+	}
+
+	key := fmt.Sprintf("%s-v%d", artifactID, version)
+	data, ok := cm.Data[key]
+	if !ok {
+		return nil, &api.ErrVersionNotFound{ArtifactID: artifactID, Version: version}
+	}
+
+	var ver api.ArtifactVersion
+	if err := json.Unmarshal([]byte(data), &ver); err != nil {
+		return nil, fmt.Errorf("unmarshaling version: %w", err)
+	}
+	return &ver, nil
+}
+
+func (s *ConfigMapStore) getConfigMap(ctx context.Context, name string) (*corev1.ConfigMap, error) {
+	return s.client.CoreV1().ConfigMaps(s.namespace).Get(ctx, name, metav1.GetOptions{})
+}
+
+func (s *ConfigMapStore) getOrCreateConfigMap(ctx context.Context, name string) (*corev1.ConfigMap, error) {
+	cm, err := s.getConfigMap(ctx, name)
 	if err == nil {
 		return cm, nil
 	}
@@ -187,7 +287,7 @@ func (s *ConfigMapStore) getOrCreateConfigMap(ctx context.Context) (*corev1.Conf
 	// Create the ConfigMap
 	cm = &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      s.name,
+			Name:      name,
 			Namespace: s.namespace,
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by": "vibed",

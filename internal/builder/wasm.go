@@ -20,46 +20,49 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-// BuildahBuilder builds container images by creating Kubernetes Jobs
-// that run Buildah. This avoids requiring a Docker/Podman socket.
-type BuildahBuilder struct {
+// WasmBuilder builds WebAssembly components by creating Kubernetes Jobs
+// that run wash build + wash push. This compiles source code to wasm
+// components and pushes them to an OCI registry.
+type WasmBuilder struct {
 	clientset    kubernetes.Interface
 	namespace    string
-	buildahImage string
+	builderImage string
+	registryURL  string
 	insecure     bool
 	pvcName      string
-	storagePath  string // PVC mount point base, e.g. "/data/vibed"
+	storagePath  string
 	timeout      time.Duration
 	logger       *slog.Logger
 }
 
-// NewBuildahBuilder creates a new BuildahBuilder.
-func NewBuildahBuilder(
+// NewWasmBuilder creates a new WasmBuilder.
+func NewWasmBuilder(
 	clientset kubernetes.Interface,
-	cfg config.BuildahConfig,
+	wasmCfg config.WasmBuilderConfig,
 	registry config.RegistryConfig,
 	namespace string,
 	pvcName string,
 	storagePath string,
 	logger *slog.Logger,
-) *BuildahBuilder {
-	buildahImage := cfg.Image
-	if buildahImage == "" {
-		buildahImage = "quay.io/buildah/stable:latest"
+) *WasmBuilder {
+	builderImage := wasmCfg.Image
+	if builderImage == "" {
+		builderImage = "ghcr.io/vibed/wasm-builder:latest"
 	}
 
 	timeout := 10 * time.Minute
-	if cfg.Timeout != "" {
-		if d, err := time.ParseDuration(cfg.Timeout); err == nil {
+	if wasmCfg.Timeout != "" {
+		if d, err := time.ParseDuration(wasmCfg.Timeout); err == nil {
 			timeout = d
 		}
 	}
 
-	return &BuildahBuilder{
+	return &WasmBuilder{
 		clientset:    clientset,
 		namespace:    namespace,
-		buildahImage: buildahImage,
-		insecure:     cfg.Insecure,
+		builderImage: builderImage,
+		registryURL:  registry.URL,
+		insecure:     wasmCfg.Insecure,
 		pvcName:      pvcName,
 		storagePath:  storagePath,
 		timeout:      timeout,
@@ -67,14 +70,14 @@ func NewBuildahBuilder(
 	}
 }
 
-func (b *BuildahBuilder) Build(ctx context.Context, req BuildRequest) (*BuildResult, error) {
-	b.logger.Info("building container image via Buildah Job",
+func (b *WasmBuilder) Build(ctx context.Context, req BuildRequest) (*BuildResult, error) {
+	b.logger.Info("building wasm component via wash build Job",
 		"source", req.SourceDir,
 		"image", req.ImageName,
 		"language", req.Language,
 	)
 
-	// 1. Scan source directory for language auto-detection and write Dockerfile
+	// 1. Read source files for scaffolding
 	files := make(map[string]string)
 	entries, err := os.ReadDir(req.SourceDir)
 	if err != nil {
@@ -85,41 +88,55 @@ func (b *BuildahBuilder) Build(ctx context.Context, req BuildRequest) (*BuildRes
 			files[e.Name()] = ""
 		}
 	}
-	dockerfile := GenerateDockerfile(req.Language, files)
-	dockerfilePath := filepath.Join(req.SourceDir, "Dockerfile")
-	if err := os.WriteFile(dockerfilePath, []byte(dockerfile), 0644); err != nil {
-		return nil, fmt.Errorf("writing Dockerfile: %w", err)
+
+	// 2. Generate wasm scaffold files (wasmcloud.toml, WIT, etc.)
+	scaffoldFiles := GenerateWasmScaffold(req.Language, req.ImageName, files)
+	for filename, content := range scaffoldFiles {
+		path := filepath.Join(req.SourceDir, filename)
+		// Skip if user already provided this file
+		if _, statErr := os.Stat(path); statErr == nil {
+			b.logger.Info("skipping scaffold file (user-provided)", "file", filename)
+			continue
+		}
+		// Create parent directories for nested files (e.g., wit/world.wit)
+		if dir := filepath.Dir(path); dir != req.SourceDir {
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				return nil, fmt.Errorf("creating scaffold directory: %w", err)
+			}
+		}
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			return nil, fmt.Errorf("writing scaffold file %q: %w", filename, err)
+		}
 	}
 
-	// 2. Compute sub-path relative to PVC mount
+	// 3. Compute sub-path relative to PVC mount
 	subPath := strings.TrimPrefix(req.SourceDir, b.storagePath+"/")
 
-	// 3. Create a unique job name (use artifact ID from parent dir, not "src")
+	// 4. Create a unique job name (use artifact ID from parent dir, not "src")
 	shortID := filepath.Base(filepath.Dir(req.SourceDir))
 	if len(shortID) > 16 {
 		shortID = shortID[:16]
 	}
-	jobName := fmt.Sprintf("vibed-build-%s", shortID)
+	jobName := fmt.Sprintf("vibed-wasm-%s", shortID)
 
-	// 4. Build the Buildah command
-	tlsVerify := "true"
+	// 5. Build the wash build + push command
+	insecureFlag := ""
 	if b.insecure {
-		tlsVerify = "false"
+		insecureFlag = "--insecure"
 	}
 	buildCmd := fmt.Sprintf(
-		"buildah bud --storage-driver=vfs --isolation=chroot -t %s /workspace && "+
-			"buildah push --storage-driver=vfs --tls-verify=%s %s docker://%s",
-		req.ImageName, tlsVerify, req.ImageName, req.ImageName,
+		"cd /workspace && wash build && wash push %s %s /workspace/build/*.wasm",
+		insecureFlag, req.ImageName,
 	)
 
-	// 5. Create K8s Job
+	// 6. Create K8s Job
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
 			Namespace: b.namespace,
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by": "vibed",
-				"vibed.dev/component":          "build",
+				"vibed.dev/component":          "wasm-build",
 			},
 		},
 		Spec: batchv1.JobSpec{
@@ -130,21 +147,16 @@ func (b *BuildahBuilder) Build(ctx context.Context, req BuildRequest) (*BuildRes
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{
 						{
-							Name:    "buildah",
-							Image:   b.buildahImage,
-							Command: []string{"sh", "-c"},
-							Args:    []string{buildCmd},
+							Name:            "wash",
+							Image:           b.builderImage,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							Command:         []string{"sh", "-c"},
+							Args:            []string{buildCmd},
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "source",
 									MountPath: "/workspace",
 									SubPath:   subPath,
-									ReadOnly:  true,
-								},
-							},
-							SecurityContext: &corev1.SecurityContext{
-								Capabilities: &corev1.Capabilities{
-									Add: []corev1.Capability{"SETUID", "SETGID"},
 								},
 							},
 						},
@@ -164,28 +176,27 @@ func (b *BuildahBuilder) Build(ctx context.Context, req BuildRequest) (*BuildRes
 		},
 	}
 
-	b.logger.Info("creating build Job", "job", jobName, "namespace", b.namespace)
+	b.logger.Info("creating wasm build Job", "job", jobName, "namespace", b.namespace)
 	_, err = b.clientset.BatchV1().Jobs(b.namespace).Create(ctx, job, metav1.CreateOptions{})
 	if k8serrors.IsAlreadyExists(err) {
-		b.logger.Warn("stale build Job exists, deleting and retrying", "job", jobName)
+		b.logger.Warn("stale wasm build Job exists, deleting and retrying", "job", jobName)
 		b.cleanup(ctx, jobName)
 		time.Sleep(2 * time.Second)
 		_, err = b.clientset.BatchV1().Jobs(b.namespace).Create(ctx, job, metav1.CreateOptions{})
 	}
 	if err != nil {
-		return nil, fmt.Errorf("creating build Job: %w", err)
+		return nil, fmt.Errorf("creating wasm build Job: %w", err)
 	}
 
-	// 6. Wait for Job completion
+	// 7. Wait for Job completion
 	err = b.waitForJob(ctx, jobName)
 	if err != nil {
-		// Fetch logs for debugging
 		logs := b.fetchJobLogs(ctx, jobName)
 		b.cleanup(ctx, jobName)
-		return nil, fmt.Errorf("build failed: %w\nBuild logs:\n%s", err, logs)
+		return nil, fmt.Errorf("wasm build failed: %w\nBuild logs:\n%s", err, logs)
 	}
 
-	b.logger.Info("build completed", "image", req.ImageName)
+	b.logger.Info("wasm build completed", "image", req.ImageName)
 	b.cleanup(ctx, jobName)
 
 	return &BuildResult{
@@ -193,7 +204,7 @@ func (b *BuildahBuilder) Build(ctx context.Context, req BuildRequest) (*BuildRes
 	}, nil
 }
 
-func (b *BuildahBuilder) waitForJob(_ context.Context, jobName string) error {
+func (b *WasmBuilder) waitForJob(_ context.Context, jobName string) error {
 	// Use a detached context so MCP client disconnects don't kill the build.
 	waitCtx, cancel := context.WithTimeout(context.Background(), b.timeout)
 	defer cancel()
@@ -204,7 +215,7 @@ func (b *BuildahBuilder) waitForJob(_ context.Context, jobName string) error {
 	for {
 		select {
 		case <-waitCtx.Done():
-			return fmt.Errorf("build timed out after %v", b.timeout)
+			return fmt.Errorf("wasm build timed out after %v", b.timeout)
 		case <-ticker.C:
 			job, err := b.clientset.BatchV1().Jobs(b.namespace).Get(waitCtx, jobName, metav1.GetOptions{})
 			if err != nil {
@@ -215,13 +226,13 @@ func (b *BuildahBuilder) waitForJob(_ context.Context, jobName string) error {
 				return nil
 			}
 			if job.Status.Failed > 0 {
-				return fmt.Errorf("build Job failed")
+				return fmt.Errorf("wasm build Job failed")
 			}
 		}
 	}
 }
 
-func (b *BuildahBuilder) fetchJobLogs(_ context.Context, jobName string) string {
+func (b *WasmBuilder) fetchJobLogs(_ context.Context, jobName string) string {
 	logCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -250,7 +261,7 @@ func (b *BuildahBuilder) fetchJobLogs(_ context.Context, jobName string) string 
 	return strings.Join(lines, "\n")
 }
 
-func (b *BuildahBuilder) cleanup(_ context.Context, jobName string) {
+func (b *WasmBuilder) cleanup(_ context.Context, jobName string) {
 	cleanCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -259,6 +270,6 @@ func (b *BuildahBuilder) cleanup(_ context.Context, jobName string) {
 		PropagationPolicy: &propagation,
 	})
 	if err != nil && !k8serrors.IsNotFound(err) {
-		b.logger.Warn("failed to cleanup build Job", "job", jobName, "error", err)
+		b.logger.Warn("failed to cleanup wasm build Job", "job", jobName, "error", err)
 	}
 }

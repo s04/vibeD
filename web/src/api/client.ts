@@ -1,11 +1,14 @@
 export interface ArtifactSummary {
   id: string;
   name: string;
+  owner_id?: string;
   status: 'pending' | 'building' | 'deploying' | 'running' | 'failed' | 'deleted';
   target: 'knative' | 'kubernetes' | 'wasmcloud';
   url?: string;
   created_at: string;
   updated_at: string;
+  version: number;
+  shared_with?: string[];
 }
 
 export interface Artifact extends ArtifactSummary {
@@ -15,6 +18,20 @@ export interface Artifact extends ArtifactSummary {
   language?: string;
   error?: string;
   storage_ref?: string;
+  version_id?: string;
+}
+
+export interface ArtifactVersion {
+  version_id: string;
+  artifact_id: string;
+  version: number;
+  image_ref: string;
+  storage_ref?: string;
+  env_vars?: Record<string, string>;
+  status: string;
+  url?: string;
+  created_at: string;
+  created_by: string;
 }
 
 export interface TargetInfo {
@@ -27,6 +44,15 @@ export interface TargetInfo {
 export interface LogsResponse {
   artifact_id: string;
   logs: string[];
+}
+
+export interface WhoAmI {
+  user_id: string;
+  role: string;
+}
+
+export interface OrganizationInfo {
+  name: string;
 }
 
 const BASE = '';
@@ -71,4 +97,50 @@ export async function fetchTargets(): Promise<TargetInfo[]> {
   const res = await fetchWithTimeout(`${BASE}/api/targets`);
   if (!res.ok) throw new Error(`Failed to fetch targets: ${res.statusText}`);
   return res.json();
+}
+
+export async function fetchWhoami(): Promise<WhoAmI> {
+  const res = await fetchWithTimeout(`${BASE}/api/whoami`);
+  if (!res.ok) throw new Error(`Failed to fetch user info: ${res.statusText}`);
+  return res.json();
+}
+
+export async function fetchOrganization(): Promise<OrganizationInfo> {
+  const res = await fetchWithTimeout(`${BASE}/api/organization`);
+  if (!res.ok) throw new Error(`Failed to fetch organization: ${res.statusText}`);
+  return res.json();
+}
+
+export async function fetchVersions(id: string): Promise<ArtifactVersion[]> {
+  const res = await fetchWithTimeout(`${BASE}/api/artifacts/${id}/versions`);
+  if (!res.ok) throw new Error(`Failed to fetch versions: ${res.statusText}`);
+  const data = await res.json();
+  return data?.versions ?? [];
+}
+
+export async function rollbackArtifact(id: string, version: number): Promise<void> {
+  const res = await fetchWithTimeout(`${BASE}/api/artifacts/${id}/rollback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version }),
+  });
+  if (!res.ok) throw new Error(`Failed to rollback artifact: ${res.statusText}`);
+}
+
+export async function shareArtifact(id: string, userIds: string[]): Promise<void> {
+  const res = await fetchWithTimeout(`${BASE}/api/artifacts/${id}/share`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_ids: userIds }),
+  });
+  if (!res.ok) throw new Error(`Failed to share artifact: ${res.statusText}`);
+}
+
+export async function unshareArtifact(id: string, userIds: string[]): Promise<void> {
+  const res = await fetchWithTimeout(`${BASE}/api/artifacts/${id}/unshare`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_ids: userIds }),
+  });
+  if (!res.ok) throw new Error(`Failed to unshare artifact: ${res.statusText}`);
 }

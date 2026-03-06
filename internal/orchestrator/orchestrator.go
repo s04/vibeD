@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -56,16 +57,17 @@ type DeployResult struct {
 
 // Orchestrator coordinates the full deploy/update/delete lifecycle.
 type Orchestrator struct {
-	cfg       *config.Config
-	detector  *environment.Detector
-	builder   builder.Builder
-	factory   *deployer.Factory
-	storage   storage.Storage
-	store     store.ArtifactStore
-	metrics   *metrics.Metrics
-	clientset kubernetes.Interface
-	imageBase string
-	logger    *slog.Logger
+	cfg         *config.Config
+	detector    *environment.Detector
+	builder     builder.Builder
+	wasmBuilder builder.Builder // optional: builds wasm components for wasmCloud target
+	factory     *deployer.Factory
+	storage     storage.Storage
+	store       store.ArtifactStore
+	metrics     *metrics.Metrics
+	clientset   kubernetes.Interface
+	imageBase   string
+	logger      *slog.Logger
 }
 
 // NewOrchestrator creates a new Orchestrator with all subsystems wired.
@@ -73,6 +75,7 @@ func NewOrchestrator(
 	cfg *config.Config,
 	detector *environment.Detector,
 	bldr builder.Builder,
+	wasmBldr builder.Builder,
 	factory *deployer.Factory,
 	stg storage.Storage,
 	st store.ArtifactStore,
@@ -86,16 +89,17 @@ func NewOrchestrator(
 	}
 
 	return &Orchestrator{
-		cfg:       cfg,
-		detector:  detector,
-		builder:   bldr,
-		factory:   factory,
-		storage:   stg,
-		store:     st,
-		metrics:   m,
-		clientset: clientset,
-		imageBase: imageBase,
-		logger:    logger,
+		cfg:         cfg,
+		detector:    detector,
+		builder:     bldr,
+		wasmBuilder: wasmBldr,
+		factory:     factory,
+		storage:     stg,
+		store:       st,
+		metrics:     m,
+		clientset:   clientset,
+		imageBase:   imageBase,
+		logger:      logger,
 	}
 }
 
@@ -116,9 +120,15 @@ func (o *Orchestrator) Deploy(ctx context.Context, req DeployRequest) (*DeployRe
 		}
 	}
 
-	// 1c. Check for duplicate name
+	// 1c. Check for duplicate name — allow overwrite if stuck/failed
 	if existing, _ := o.store.GetByName(ctx, req.Name); existing != nil {
-		return nil, &api.ErrAlreadyExists{Name: req.Name}
+		if existing.Status == api.StatusFailed || existing.Status == api.StatusBuilding {
+			o.logger.Info("overwriting stuck/failed artifact with same name",
+				"name", req.Name, "old_id", existing.ID, "old_status", existing.Status)
+			_ = o.Delete(ctx, existing.ID)
+		} else {
+			return nil, &api.ErrAlreadyExists{Name: req.Name}
+		}
 	}
 
 	// 2. Generate artifact ID
@@ -151,11 +161,29 @@ func (o *Orchestrator) Deploy(ctx context.Context, req DeployRequest) (*DeployRe
 	}
 	artifact.StorageRef = storageRef.LocalPath
 
-	// 5. Select deployment target
+	// 5. Detect language early (needed for target selection)
+	lang := req.Language
+	if lang == "" || lang == "auto" {
+		lang = builder.DetectLanguage(req.Files)
+	}
+	artifact.Language = lang
+
+	// 6. Select deployment target (language-aware)
 	preferred := api.DeploymentTarget(req.Target)
 	if preferred == "" {
 		preferred = api.DeploymentTarget(o.cfg.Deployment.PreferredTarget)
 	}
+
+	// For compiled wasm-capable languages (Go, Rust), prefer wasmCloud when available
+	if (preferred == "" || preferred == "auto") && isWasmCapable(lang) && o.wasmBuilder != nil {
+		result := o.detector.Detect()
+		if result.WasmCloud {
+			preferred = api.TargetWasmCloud
+			o.logger.Info("auto-selected wasmCloud for compiled language",
+				"name", req.Name, "language", lang)
+		}
+	}
+
 	target, err := o.detector.SelectTarget(preferred)
 	if err != nil {
 		o.failArtifact(ctx, artifact, fmt.Sprintf("selecting target: %v", err))
@@ -163,28 +191,37 @@ func (o *Orchestrator) Deploy(ctx context.Context, req DeployRequest) (*DeployRe
 	}
 	artifact.Target = target
 
-	// 6. Detect language and check for static shortcut
-	lang := req.Language
-	if lang == "" || lang == "auto" {
-		lang = builder.DetectLanguage(req.Files)
-	}
-	artifact.Language = lang
-
-	// Static shortcut: skip build, use ConfigMap + nginx directly
+	// Static shortcut: skip build, use ConfigMap + nginx directly.
+	// wasmCloud cannot serve static files, so fall back to another target.
 	if lang == "static" && isSmallStatic(req.Files) {
+		if target == api.TargetWasmCloud {
+			o.logger.Info("wasmCloud cannot serve static files, falling back",
+				"name", req.Name)
+			fallback, err := o.detector.SelectTarget("auto")
+			if err != nil || fallback == api.TargetWasmCloud {
+				fallback = api.TargetKubernetes
+			}
+			target = fallback
+			artifact.Target = target
+		}
 		o.logger.Info("using static ConfigMap deploy (skipping build)",
 			"name", req.Name, "files", len(req.Files))
 		return o.deployStatic(ctx, artifact, req.Files, target)
 	}
 
-	// 7. Build container image (non-static path)
+	// 7. Build image (container or wasm depending on target)
 	imageName := fmt.Sprintf("%s/%s:latest", o.imageBase, req.Name)
 
 	o.metrics.BuildsInFlight.Inc()
 	defer o.metrics.BuildsInFlight.Dec()
 	buildStart := time.Now()
 
-	buildResult, err := o.builder.Build(ctx, builder.BuildRequest{
+	activeBuilder := o.builder
+	if target == api.TargetWasmCloud && o.wasmBuilder != nil {
+		activeBuilder = o.wasmBuilder
+	}
+
+	buildResult, err := activeBuilder.Build(ctx, builder.BuildRequest{
 		SourceDir: storageRef.LocalPath,
 		ImageName: imageName,
 		Language:  lang,
@@ -228,9 +265,11 @@ func (o *Orchestrator) Deploy(ctx context.Context, req DeployRequest) (*DeployRe
 	o.metrics.DeployDuration.WithLabelValues("success", string(target)).Observe(deployDur)
 	o.metrics.ArtifactsActive.WithLabelValues(string(target)).Inc()
 
-	// 9. Update artifact with URL and running status
+	// 9. Update artifact with URL, running status, and version
 	artifact.URL = deployResult.URL
 	artifact.Status = api.StatusRunning
+	artifact.Version = 1
+	artifact.VersionID = generateID()
 	artifact.UpdatedAt = time.Now()
 	if err := o.store.Update(ctx, artifact); err != nil {
 		o.logger.Warn("failed to persist deploy result",
@@ -239,11 +278,15 @@ func (o *Orchestrator) Deploy(ctx context.Context, req DeployRequest) (*DeployRe
 		)
 	}
 
+	// Create initial version snapshot
+	o.createVersionSnapshot(ctx, artifact)
+
 	o.logger.Info("artifact deployed successfully",
 		"id", artifactID,
 		"name", req.Name,
 		"target", target,
 		"url", deployResult.URL,
+		"version", 1,
 	)
 
 	return &DeployResult{
@@ -263,7 +306,7 @@ func (o *Orchestrator) Update(ctx context.Context, req UpdateRequest) (*DeployRe
 		return nil, err
 	}
 
-	if err := o.checkOwnership(ctx, artifact); err != nil {
+	if err := o.checkWriteOwnership(ctx, artifact); err != nil {
 		return nil, err
 	}
 
@@ -307,7 +350,12 @@ func (o *Orchestrator) Update(ctx context.Context, req UpdateRequest) (*DeployRe
 	defer o.metrics.BuildsInFlight.Dec()
 	buildStart := time.Now()
 
-	buildResult, err := o.builder.Build(ctx, builder.BuildRequest{
+	activeBuilder := o.builder
+	if artifact.Target == api.TargetWasmCloud && o.wasmBuilder != nil {
+		activeBuilder = o.wasmBuilder
+	}
+
+	buildResult, err := activeBuilder.Build(ctx, builder.BuildRequest{
 		SourceDir: storageRef.LocalPath,
 		ImageName: imageName,
 		Language:  lang,
@@ -350,8 +398,14 @@ func (o *Orchestrator) Update(ctx context.Context, req UpdateRequest) (*DeployRe
 	o.metrics.DeploysTotal.WithLabelValues("success", target).Inc()
 	o.metrics.DeployDuration.WithLabelValues("success", target).Observe(deployDur)
 
+	newVersion := artifact.Version + 1
+	if newVersion <= 1 {
+		newVersion = 2 // pre-versioning artifacts jump from 0 to 2
+	}
 	artifact.URL = deployResult.URL
 	artifact.Status = api.StatusRunning
+	artifact.Version = newVersion
+	artifact.VersionID = generateID()
 	artifact.UpdatedAt = time.Now()
 	if err := o.store.Update(ctx, artifact); err != nil {
 		o.logger.Warn("failed to persist update result",
@@ -359,6 +413,9 @@ func (o *Orchestrator) Update(ctx context.Context, req UpdateRequest) (*DeployRe
 			"error", err,
 		)
 	}
+
+	// Create version snapshot
+	o.createVersionSnapshot(ctx, artifact)
 
 	return &DeployResult{
 		ArtifactID: artifact.ID,
@@ -378,7 +435,7 @@ func (o *Orchestrator) Delete(ctx context.Context, artifactID string) error {
 		return err
 	}
 
-	if err := o.checkOwnership(ctx, artifact); err != nil {
+	if err := o.checkWriteOwnership(ctx, artifact); err != nil {
 		o.metrics.DeletesTotal.WithLabelValues("failed").Inc()
 		return err
 	}
@@ -420,10 +477,12 @@ func (o *Orchestrator) Status(ctx context.Context, artifactID string) (*api.Arti
 }
 
 // List returns all artifacts matching the filter, scoped to the authenticated user.
+// Admins see all artifacts. Regular users see owned + shared artifacts.
 // When auth is disabled (no user in context), all artifacts are returned.
 func (o *Orchestrator) List(ctx context.Context, statusFilter string) ([]api.ArtifactSummary, error) {
 	ownerID := vibedauth.UserIDFromContext(ctx)
-	return o.store.List(ctx, statusFilter, ownerID)
+	adminView := vibedauth.IsAdmin(ctx)
+	return o.store.List(ctx, statusFilter, ownerID, adminView)
 }
 
 // Logs returns recent log lines from a deployed artifact.
@@ -454,13 +513,39 @@ func (o *Orchestrator) ListTargets() []api.TargetInfo {
 	return o.detector.ListTargets()
 }
 
-// checkOwnership verifies that the current user owns the artifact.
+// checkOwnership verifies that the current user can read the artifact.
+// Allows: owner, admin, or users in the SharedWith list.
 // Returns ErrNotFound (not Forbidden) to avoid leaking artifact existence to non-owners.
 // When auth is disabled (ownerID is empty), all ownership checks pass.
 func (o *Orchestrator) checkOwnership(ctx context.Context, artifact *api.Artifact) error {
 	ownerID := vibedauth.UserIDFromContext(ctx)
 	if ownerID == "" {
 		return nil // Auth disabled — no ownership enforcement
+	}
+	if vibedauth.IsAdmin(ctx) {
+		return nil // Admin can access everything
+	}
+	if artifact.OwnerID == ownerID {
+		return nil // Owner match
+	}
+	// Check shared access
+	for _, uid := range artifact.SharedWith {
+		if uid == ownerID {
+			return nil
+		}
+	}
+	return &api.ErrNotFound{ArtifactID: artifact.ID}
+}
+
+// checkWriteOwnership verifies that the current user can modify the artifact.
+// Only owner and admin can write — shared users have read-only access.
+func (o *Orchestrator) checkWriteOwnership(ctx context.Context, artifact *api.Artifact) error {
+	ownerID := vibedauth.UserIDFromContext(ctx)
+	if ownerID == "" {
+		return nil // Auth disabled
+	}
+	if vibedauth.IsAdmin(ctx) {
+		return nil // Admin can modify everything
 	}
 	if artifact.OwnerID != "" && artifact.OwnerID != ownerID {
 		return &api.ErrNotFound{ArtifactID: artifact.ID}
@@ -480,11 +565,14 @@ func (o *Orchestrator) updateStatus(ctx context.Context, artifact *api.Artifact,
 	}
 }
 
-func (o *Orchestrator) failArtifact(ctx context.Context, artifact *api.Artifact, reason string) {
+func (o *Orchestrator) failArtifact(_ context.Context, artifact *api.Artifact, reason string) {
+	failCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	artifact.Status = api.StatusFailed
 	artifact.Error = reason
 	artifact.UpdatedAt = time.Now()
-	if err := o.store.Update(ctx, artifact); err != nil {
+	if err := o.store.Update(failCtx, artifact); err != nil {
 		o.logger.Warn("failed to persist artifact failure",
 			"artifact_id", artifact.ID,
 			"reason", reason,
@@ -526,6 +614,16 @@ func validateFilePath(path string) error {
 		return &api.ErrInvalidInput{Field: "files", Message: fmt.Sprintf("path traversal not allowed: %q", path)}
 	}
 	return nil
+}
+
+// isWasmCapable returns true for compiled languages that can target WebAssembly.
+func isWasmCapable(lang string) bool {
+	switch lang {
+	case "go", "rust":
+		return true
+	default:
+		return false
+	}
 }
 
 func generateID() string {
@@ -619,6 +717,8 @@ func (o *Orchestrator) deployStatic(ctx context.Context, artifact *api.Artifact,
 
 	artifact.URL = deployResult.URL
 	artifact.Status = api.StatusRunning
+	artifact.Version = 1
+	artifact.VersionID = generateID()
 	artifact.UpdatedAt = time.Now()
 	if err := o.store.Update(ctx, artifact); err != nil {
 		o.logger.Warn("failed to persist static deploy result",
@@ -627,9 +727,12 @@ func (o *Orchestrator) deployStatic(ctx context.Context, artifact *api.Artifact,
 		)
 	}
 
+	o.createVersionSnapshot(ctx, artifact)
+
 	o.logger.Info("static artifact deployed (no build)",
 		"id", artifact.ID, "name", artifact.Name,
-		"target", target, "url", deployResult.URL)
+		"target", target, "url", deployResult.URL,
+		"version", 1)
 
 	return &DeployResult{
 		ArtifactID: artifact.ID,
@@ -704,8 +807,14 @@ func (o *Orchestrator) updateStatic(ctx context.Context, artifact *api.Artifact,
 	o.metrics.DeploysTotal.WithLabelValues("success", target).Inc()
 	o.metrics.DeployDuration.WithLabelValues("success", target).Observe(deployDur)
 
+	newVersion := artifact.Version + 1
+	if newVersion <= 1 {
+		newVersion = 2
+	}
 	artifact.URL = deployResult.URL
 	artifact.Status = api.StatusRunning
+	artifact.Version = newVersion
+	artifact.VersionID = generateID()
 	artifact.UpdatedAt = time.Now()
 	if err := o.store.Update(ctx, artifact); err != nil {
 		o.logger.Warn("failed to persist static update result",
@@ -713,6 +822,8 @@ func (o *Orchestrator) updateStatic(ctx context.Context, artifact *api.Artifact,
 			"error", err,
 		)
 	}
+
+	o.createVersionSnapshot(ctx, artifact)
 
 	return &DeployResult{
 		ArtifactID: artifact.ID,
@@ -722,4 +833,180 @@ func (o *Orchestrator) updateStatic(ctx context.Context, artifact *api.Artifact,
 		Status:     string(api.StatusRunning),
 		ImageRef:   "nginx:alpine",
 	}, nil
+}
+
+// createVersionSnapshot stores a point-in-time version snapshot of the artifact.
+func (o *Orchestrator) createVersionSnapshot(ctx context.Context, artifact *api.Artifact) {
+	version := &api.ArtifactVersion{
+		VersionID:  artifact.VersionID,
+		ArtifactID: artifact.ID,
+		Version:    artifact.Version,
+		ImageRef:   artifact.ImageRef,
+		StorageRef: artifact.StorageRef,
+		EnvVars:    artifact.EnvVars,
+		Status:     artifact.Status,
+		URL:        artifact.URL,
+		CreatedAt:  artifact.UpdatedAt,
+		CreatedBy:  vibedauth.UserIDFromContext(ctx),
+	}
+
+	if err := o.store.CreateVersion(ctx, version); err != nil {
+		o.logger.Warn("failed to create version snapshot",
+			"artifact_id", artifact.ID,
+			"version", artifact.Version,
+			"error", err,
+		)
+	}
+}
+
+// ListVersions returns all version snapshots for an artifact.
+func (o *Orchestrator) ListVersions(ctx context.Context, artifactID string) ([]api.ArtifactVersion, error) {
+	artifact, err := o.store.Get(ctx, artifactID)
+	if err != nil {
+		return nil, err
+	}
+	if err := o.checkOwnership(ctx, artifact); err != nil {
+		return nil, err
+	}
+	return o.store.ListVersions(ctx, artifactID)
+}
+
+// Rollback redeploys an artifact using a previous version's image and config.
+// It creates a new version entry for the rollback (does not rewind history).
+func (o *Orchestrator) Rollback(ctx context.Context, artifactID string, targetVersion int) (*DeployResult, error) {
+	artifact, err := o.store.Get(ctx, artifactID)
+	if err != nil {
+		return nil, err
+	}
+	if err := o.checkWriteOwnership(ctx, artifact); err != nil {
+		return nil, err
+	}
+
+	// Load the target version snapshot
+	snapshot, err := o.store.GetVersion(ctx, artifactID, targetVersion)
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply the snapshot's image and env vars to the current artifact
+	artifact.ImageRef = snapshot.ImageRef
+	artifact.StorageRef = snapshot.StorageRef
+	if snapshot.EnvVars != nil {
+		artifact.EnvVars = snapshot.EnvVars
+	}
+
+	// Redeploy with the old image
+	o.updateStatus(ctx, artifact, api.StatusDeploying)
+	dep, err := o.factory.Get(artifact.Target)
+	if err != nil {
+		return nil, err
+	}
+
+	target := string(artifact.Target)
+	deployStart := time.Now()
+	deployResult, err := dep.Update(ctx, artifact)
+	deployDur := time.Since(deployStart).Seconds()
+
+	if err != nil {
+		o.metrics.DeploysTotal.WithLabelValues("failed", target).Inc()
+		o.metrics.DeployDuration.WithLabelValues("failed", target).Observe(deployDur)
+		o.failArtifact(ctx, artifact, fmt.Sprintf("rollback deploy failed: %v", err))
+		return nil, &api.ErrDeployFailed{Reason: fmt.Sprintf("rollback to v%d failed: %v", targetVersion, err)}
+	}
+
+	o.metrics.DeploysTotal.WithLabelValues("success", target).Inc()
+	o.metrics.DeployDuration.WithLabelValues("success", target).Observe(deployDur)
+
+	// Create a new version entry for the rollback
+	newVersion := artifact.Version + 1
+	if newVersion <= 1 {
+		newVersion = 2
+	}
+	artifact.URL = deployResult.URL
+	artifact.Status = api.StatusRunning
+	artifact.Version = newVersion
+	artifact.VersionID = generateID()
+	artifact.UpdatedAt = time.Now()
+	if err := o.store.Update(ctx, artifact); err != nil {
+		o.logger.Warn("failed to persist rollback result",
+			"artifact_id", artifact.ID,
+			"error", err,
+		)
+	}
+
+	o.createVersionSnapshot(ctx, artifact)
+
+	o.logger.Info("artifact rolled back",
+		"id", artifactID,
+		"from_version", artifact.Version-1,
+		"to_snapshot", targetVersion,
+		"new_version", newVersion,
+	)
+
+	return &DeployResult{
+		ArtifactID: artifact.ID,
+		Name:       artifact.Name,
+		URL:        deployResult.URL,
+		Target:     target,
+		Status:     string(api.StatusRunning),
+		ImageRef:   artifact.ImageRef,
+	}, nil
+}
+
+// ShareArtifact grants read-only access to the specified users.
+// Only the owner or an admin can share an artifact.
+func (o *Orchestrator) ShareArtifact(ctx context.Context, artifactID string, userIDs []string) error {
+	artifact, err := o.store.Get(ctx, artifactID)
+	if err != nil {
+		return err
+	}
+	if err := o.checkWriteOwnership(ctx, artifact); err != nil {
+		return err
+	}
+
+	// Merge and deduplicate
+	existing := make(map[string]bool, len(artifact.SharedWith))
+	for _, uid := range artifact.SharedWith {
+		existing[uid] = true
+	}
+	for _, uid := range userIDs {
+		if uid != "" && !existing[uid] {
+			artifact.SharedWith = append(artifact.SharedWith, uid)
+			existing[uid] = true
+		}
+	}
+	sort.Strings(artifact.SharedWith)
+
+	artifact.UpdatedAt = time.Now()
+	return o.store.Update(ctx, artifact)
+}
+
+// UnshareArtifact revokes read-only access from the specified users.
+// Only the owner or an admin can unshare an artifact.
+func (o *Orchestrator) UnshareArtifact(ctx context.Context, artifactID string, userIDs []string) error {
+	artifact, err := o.store.Get(ctx, artifactID)
+	if err != nil {
+		return err
+	}
+	if err := o.checkWriteOwnership(ctx, artifact); err != nil {
+		return err
+	}
+
+	// Build removal set
+	toRemove := make(map[string]bool, len(userIDs))
+	for _, uid := range userIDs {
+		toRemove[uid] = true
+	}
+
+	// Filter out removed users
+	filtered := make([]string, 0, len(artifact.SharedWith))
+	for _, uid := range artifact.SharedWith {
+		if !toRemove[uid] {
+			filtered = append(filtered, uid)
+		}
+	}
+	artifact.SharedWith = filtered
+
+	artifact.UpdatedAt = time.Now()
+	return o.store.Update(ctx, artifact)
 }

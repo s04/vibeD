@@ -6,16 +6,21 @@ import (
 	"net/http"
 	"strings"
 
+	vibedauth "github.com/maxkorbacher/vibed/internal/auth"
+	"github.com/maxkorbacher/vibed/internal/config"
 	"github.com/maxkorbacher/vibed/internal/orchestrator"
 )
 
 // NewHandler creates an HTTP handler that serves the frontend and REST API.
-func NewHandler(orch *orchestrator.Orchestrator) http.Handler {
+func NewHandler(orch *orchestrator.Orchestrator, cfg *config.Config) http.Handler {
 	mux := http.NewServeMux()
 
 	// API routes
 	mux.HandleFunc("/api/artifacts", handleArtifacts(orch))
+	mux.HandleFunc("/api/artifacts/", handleArtifacts(orch))
 	mux.HandleFunc("/api/targets", handleTargets(orch))
+	mux.HandleFunc("/api/whoami", handleWhoami())
+	mux.HandleFunc("/api/organization", handleOrganization(cfg))
 
 	// Serve static frontend files
 	staticFS, _ := fs.Sub(StaticFiles, "static")
@@ -31,13 +36,27 @@ func handleArtifacts(orch *orchestrator.Orchestrator) http.HandlerFunc {
 		path = strings.TrimPrefix(path, "/")
 
 		if path != "" {
-			// Check for /api/artifacts/{id}/logs
 			parts := strings.SplitN(path, "/", 2)
 			artifactID := parts[0]
 
-			if len(parts) == 2 && parts[1] == "logs" {
-				handleArtifactLogs(orch, artifactID, w, r)
-				return
+			if len(parts) == 2 {
+				switch parts[1] {
+				case "logs":
+					handleArtifactLogs(orch, artifactID, w, r)
+					return
+				case "versions":
+					handleArtifactVersions(orch, artifactID, w, r)
+					return
+				case "rollback":
+					handleArtifactRollback(orch, artifactID, w, r)
+					return
+				case "share":
+					handleArtifactShare(orch, artifactID, w, r)
+					return
+				case "unshare":
+					handleArtifactUnshare(orch, artifactID, w, r)
+					return
+				}
 			}
 
 			if r.Method == http.MethodDelete {
@@ -111,3 +130,151 @@ func handleTargets(orch *orchestrator.Orchestrator) http.HandlerFunc {
 		json.NewEncoder(w).Encode(targets)
 	}
 }
+
+func handleArtifactVersions(orch *orchestrator.Orchestrator, id string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	versions, err := orch.ListVersions(r.Context(), id)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"artifact_id": id,
+		"versions":    versions,
+	})
+}
+
+func handleArtifactRollback(orch *orchestrator.Orchestrator, id string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		Version int `json:"version"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if body.Version <= 0 {
+		http.Error(w, "version must be a positive integer", http.StatusBadRequest)
+		return
+	}
+
+	result, err := orch.Rollback(r.Context(), id, body.Version)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+func handleArtifactShare(orch *orchestrator.Orchestrator, id string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		UserIDs []string `json:"user_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(body.UserIDs) == 0 {
+		http.Error(w, "user_ids is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := orch.ShareArtifact(r.Context(), id, body.UserIDs); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"artifact_id": id,
+		"shared_with": body.UserIDs,
+		"status":      "shared",
+	})
+}
+
+func handleArtifactUnshare(orch *orchestrator.Orchestrator, id string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		UserIDs []string `json:"user_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(body.UserIDs) == 0 {
+		http.Error(w, "user_ids is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := orch.UnshareArtifact(r.Context(), id, body.UserIDs); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"artifact_id": id,
+		"removed":     body.UserIDs,
+		"status":      "unshared",
+	})
+}
+
+func handleWhoami() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := vibedauth.UserIDFromContext(r.Context())
+		role := vibedauth.RoleFromContext(r.Context())
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"user_id": userID,
+			"role":    role,
+		})
+	}
+}
+
+func handleOrganization(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"name": cfg.Organization.Name,
+		})
+	}
+}
+

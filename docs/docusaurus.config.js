@@ -4,9 +4,9 @@
 const config = {
   title: 'vibeD',
   tagline: 'Workload Orchestrator for GenAI-generated Artifacts',
-  url: 'https://maxkorbacher.github.io',
-  baseUrl: '/vibed/',
-  organizationName: 'maxkorbacher',
+  url: 'https://vibed.github.io',
+  baseUrl: '/',
+  organizationName: 'vibed-project',
   projectName: 'vibed',
   onBrokenLinks: 'throw',
 
@@ -17,7 +17,7 @@ const config = {
       ({
         docs: {
           sidebarPath: './sidebars.js',
-          editUrl: 'https://github.com/maxkorbacher/vibed/tree/main/docs/',
+          editUrl: 'https://github.com/vibed-project/vibed/tree/main/docs/',
         },
         theme: {
           customCss: './src/css/custom.css',
@@ -39,7 +39,7 @@ const config = {
             label: 'Docs',
           },
           {
-            href: 'https://github.com/maxkorbacher/vibed',
+            href: 'https://github.com/vibed-project/vibed',
             label: 'GitHub',
             position: 'right',
           },

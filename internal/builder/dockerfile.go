@@ -3,13 +3,15 @@ package builder
 import "strings"
 
 // DetectLanguage inspects the file map and returns the best-guess language.
-// Returns "static", "nodejs", "python", or "go".
+// Returns "static", "nodejs", "python", "go", or "rust".
 func DetectLanguage(files map[string]string) string {
 	for name := range files {
 		lower := strings.ToLower(name)
 		switch {
 		case lower == "go.mod":
 			return "go"
+		case lower == "cargo.toml":
+			return "rust"
 		case lower == "package.json":
 			return "nodejs"
 		case lower == "requirements.txt" || lower == "main.py" || lower == "app.py":

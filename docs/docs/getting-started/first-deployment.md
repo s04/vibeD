@@ -8,7 +8,33 @@ Deploy your first artifact using vibeD's MCP tools.
 
 ## Using Claude Desktop
 
-### Option A: Stdio Transport (Direct)
+### Option A: HTTP Transport (Remote / In-Cluster)
+
+If vibeD runs as a service (e.g. deployed to your Kind cluster), use [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) to bridge Claude Desktop's stdio to vibeD's HTTP endpoint.
+
+Add this to your Claude Desktop configuration (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+
+```json
+{
+  "mcpServers": {
+    "vibed": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "http://vibed.127.0.0.1.sslip.io:9090/mcp/",
+        "--allow-http"
+      ]
+    }
+  }
+}
+```
+
+:::info Prerequisites
+- **Node.js 20+** must be installed (for `npx`)
+- The vibeD MCP endpoint must be reachable from your machine — see [Port-Forward Access](./local-dev#port-forward-access) if running on a local Kind cluster
+:::
+
+### Option B: Stdio Transport (Direct)
 
 Run vibeD as a local process that Claude Desktop launches directly:
 
@@ -23,26 +49,7 @@ Run vibeD as a local process that Claude Desktop launches directly:
 }
 ```
 
-### Option B: HTTP Transport (Remote / In-Cluster)
-
-If vibeD runs as a service (e.g. deployed to your Kind cluster), use `mcp-remote` to bridge Claude Desktop's stdio to vibeD's HTTP endpoint:
-
-```json
-{
-  "mcpServers": {
-    "vibed": {
-      "command": "npx",
-      "args": ["mcp-remote", "http://localhost:8080/mcp/"]
-    }
-  }
-}
-```
-
-This requires a port-forward to the vibeD service:
-
-```bash
-kubectl port-forward svc/vibed 8080:8080 -n vibed-system
-```
+This starts vibeD in stdio mode. The binary needs access to a Kubernetes cluster via your local kubeconfig.
 
 ### Deploy Your First Artifact
 

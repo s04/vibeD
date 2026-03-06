@@ -1,0 +1,223 @@
+.vh-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 100;
+  padding: 2rem;
+}
+
+.vh-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: 100%;
+  max-width: 700px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.vh-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.vh-header h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.vh-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.5rem;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.vh-close:hover {
+  color: var(--text);
+}
+
+.vh-content {
+  overflow-y: auto;
+  padding: 0.5rem 0;
+  flex: 1;
+}
+
+.vh-loading,
+.vh-empty,
+.vh-error {
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.vh-error {
+  color: var(--red);
+}
+
+.vh-row {
+  display: flex;
+  align-items: center;
+  padding: 0.6rem 1rem;
+  gap: 1rem;
+  border-bottom: 1px solid rgba(42, 45, 62, 0.5);
+  transition: background 0.15s;
+}
+
+.vh-row:last-child {
+  border-bottom: none;
+}
+
+.vh-row:hover {
+  background: var(--bg-hover);
+}
+
+.vh-row-current {
+  background: rgba(108, 99, 255, 0.05);
+}
+
+.vh-row-left {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 80px;
+}
+
+.vh-version {
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.vh-current-tag {
+  font-size: 0.6rem;
+  color: var(--green);
+  border: 1px solid var(--green);
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.vh-row-center {
+  flex: 1;
+  min-width: 0;
+}
+
+.vh-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.15rem;
+}
+
+.vh-date {
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+.vh-user {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.vh-row-details {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.vh-image {
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300px;
+}
+
+.vh-status {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  font-weight: 500;
+}
+
+.vh-status-running {
+  color: var(--green);
+  border: 1px solid var(--green);
+}
+
+.vh-status-failed {
+  color: var(--red);
+  border: 1px solid var(--red);
+}
+
+.vh-status-building,
+.vh-status-deploying {
+  color: var(--yellow);
+  border: 1px solid var(--yellow);
+}
+
+.vh-row-right {
+  display: flex;
+  align-items: center;
+  min-width: 80px;
+  justify-content: flex-end;
+}
+
+.vh-btn {
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  padding: 0.25rem 0.6rem;
+  border-radius: 5px;
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.vh-btn:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.vh-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.vh-btn-danger {
+  background: var(--red);
+  color: white;
+  border-color: var(--red);
+}
+
+.vh-btn-danger:hover {
+  background: #dc2626;
+}
+
+.vh-confirm {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.vh-confirm-text {
+  font-size: 0.72rem;
+  color: var(--yellow);
+  font-weight: 500;
+}

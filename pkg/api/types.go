@@ -1,6 +1,9 @@
 package api
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // DeploymentTarget represents a supported deployment backend.
 type DeploymentTarget string
@@ -41,18 +44,47 @@ type Artifact struct {
 	CreatedAt   time.Time        `json:"created_at"`
 	UpdatedAt   time.Time        `json:"updated_at"`
 	StorageRef  string           `json:"storage_ref,omitempty"`
+	Version     int              `json:"version"`                    // Current version number (1-based, 0 = pre-versioning)
+	VersionID   string           `json:"version_id,omitempty"`       // Unique ID for this version snapshot
+	SharedWith  []string         `json:"shared_with,omitempty"`      // UserIDs with read-only access
 }
 
 // ArtifactSummary is a lightweight view of an artifact for list responses.
 type ArtifactSummary struct {
-	ID        string           `json:"id"`
-	Name      string           `json:"name"`
-	OwnerID   string           `json:"owner_id,omitempty"`
-	Status    ArtifactStatus   `json:"status"`
-	Target    DeploymentTarget `json:"target"`
-	URL       string           `json:"url,omitempty"`
-	CreatedAt time.Time        `json:"created_at"`
-	UpdatedAt time.Time        `json:"updated_at"`
+	ID         string           `json:"id"`
+	Name       string           `json:"name"`
+	OwnerID    string           `json:"owner_id,omitempty"`
+	Status     ArtifactStatus   `json:"status"`
+	Target     DeploymentTarget `json:"target"`
+	URL        string           `json:"url,omitempty"`
+	CreatedAt  time.Time        `json:"created_at"`
+	UpdatedAt  time.Time        `json:"updated_at"`
+	Version    int              `json:"version"`
+	SharedWith []string         `json:"shared_with,omitempty"`
+}
+
+// ArtifactVersion represents a point-in-time snapshot of an artifact.
+type ArtifactVersion struct {
+	VersionID  string            `json:"version_id"`
+	ArtifactID string            `json:"artifact_id"`
+	Version    int               `json:"version"`
+	ImageRef   string            `json:"image_ref"`
+	StorageRef string            `json:"storage_ref,omitempty"`
+	EnvVars    map[string]string `json:"env_vars,omitempty"`
+	Status     ArtifactStatus    `json:"status"`
+	URL        string            `json:"url,omitempty"`
+	CreatedAt  time.Time         `json:"created_at"`
+	CreatedBy  string            `json:"created_by"`
+}
+
+// ErrVersionNotFound is returned when a specific version does not exist.
+type ErrVersionNotFound struct {
+	ArtifactID string
+	Version    int
+}
+
+func (e *ErrVersionNotFound) Error() string {
+	return fmt.Sprintf("version %d of artifact %q not found", e.Version, e.ArtifactID)
 }
 
 // TargetInfo describes the availability of a deployment target.
@@ -66,13 +98,15 @@ type TargetInfo struct {
 // ToSummary converts an Artifact to an ArtifactSummary.
 func (a *Artifact) ToSummary() ArtifactSummary {
 	return ArtifactSummary{
-		ID:        a.ID,
-		Name:      a.Name,
-		OwnerID:   a.OwnerID,
-		Status:    a.Status,
-		Target:    a.Target,
-		URL:       a.URL,
-		CreatedAt: a.CreatedAt,
-		UpdatedAt: a.UpdatedAt,
+		ID:         a.ID,
+		Name:       a.Name,
+		OwnerID:    a.OwnerID,
+		Status:     a.Status,
+		Target:     a.Target,
+		URL:        a.URL,
+		CreatedAt:  a.CreatedAt,
+		UpdatedAt:  a.UpdatedAt,
+		Version:    a.Version,
+		SharedWith: a.SharedWith,
 	}
 }
