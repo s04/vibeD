@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/maxkorbacher/vibed/pkg/api"
+	"github.com/vibed-project/vibeD/pkg/api"
 )
 
 // MemoryStore is an in-memory ArtifactStore for development and testing.

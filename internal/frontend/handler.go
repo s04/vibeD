@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/maxkorbacher/vibed/internal/orchestrator"
+	"github.com/vibed-project/vibeD/internal/orchestrator"
 )
 
 // NewHandler creates an HTTP handler that serves the frontend and REST API.
@@ -15,6 +15,7 @@ func NewHandler(orch *orchestrator.Orchestrator) http.Handler {
 
 	// API routes
 	mux.HandleFunc("/api/artifacts", handleArtifacts(orch))
+	mux.HandleFunc("/api/artifacts/", handleArtifacts(orch))
 	mux.HandleFunc("/api/targets", handleTargets(orch))
 
 	// Serve static frontend files
