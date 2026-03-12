@@ -136,6 +136,39 @@ func oauthPassthroughVerifier(logger *slog.Logger) mcpauth.TokenVerifier {
 	}
 }
 
+// BuildRoleMap creates a mapping from user ID (APIKey Name) to role.
+// Users without an explicit role default to "user".
+func BuildRoleMap(keys []config.APIKeyConf) map[string]string {
+	m := make(map[string]string, len(keys))
+	for _, k := range keys {
+		role := k.Role
+		if role == "" {
+			role = "user"
+		}
+		m[k.Name] = role
+	}
+	return m
+}
+
+// RoleMiddleware creates middleware that injects the authenticated user's role into the context.
+// It must run after the MCP auth middleware has set the UserID in context.
+func RoleMiddleware(roleMap map[string]string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			userID := UserIDFromContext(r.Context())
+			if userID != "" {
+				role := roleMap[userID]
+				if role == "" {
+					role = "user"
+				}
+				ctx := WithRole(r.Context(), role)
+				r = r.WithContext(ctx)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // resolveKeyValue resolves an API key value using the shared config.ResolveSecret helper.
 // Supports "env:VAR_NAME" and "file:/path" patterns, or literal values.
 func resolveKeyValue(key string) string {

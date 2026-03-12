@@ -18,13 +18,22 @@ type ArtifactStore interface {
 	GetByName(ctx context.Context, name string) (*api.Artifact, error)
 
 	// List returns all artifacts, optionally filtered by status and owner.
-	// When ownerID is non-empty, only artifacts belonging to that user are returned.
-	// When ownerID is empty, all artifacts are returned (auth disabled mode).
-	List(ctx context.Context, statusFilter string, ownerID string) ([]api.ArtifactSummary, error)
+	// When ownerID is non-empty, only artifacts owned by or shared with that user are returned.
+	// When ownerID is empty or adminView is true, all artifacts are returned.
+	List(ctx context.Context, statusFilter string, ownerID string, adminView bool) ([]api.ArtifactSummary, error)
 
 	// Update replaces the artifact record. Returns ErrNotFound if not found.
 	Update(ctx context.Context, artifact *api.Artifact) error
 
-	// Delete removes an artifact by ID. Returns ErrNotFound if not found.
+	// Delete removes an artifact and its version history by ID. Returns ErrNotFound if not found.
 	Delete(ctx context.Context, id string) error
+
+	// CreateVersion stores a version snapshot for an artifact.
+	CreateVersion(ctx context.Context, version *api.ArtifactVersion) error
+
+	// ListVersions returns all version snapshots for an artifact, ordered by version number.
+	ListVersions(ctx context.Context, artifactID string) ([]api.ArtifactVersion, error)
+
+	// GetVersion retrieves a specific version snapshot. Returns ErrVersionNotFound if not found.
+	GetVersion(ctx context.Context, artifactID string, version int) (*api.ArtifactVersion, error)
 }

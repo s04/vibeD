@@ -193,11 +193,26 @@ func main() {
 	factory.Register(api.TargetKubernetes, k8sDeployer)
 
 	// Register wasmCloud deployer
-	wasmDeployer := deployer.NewWasmCloudDeployer(k8sClients.DynamicClient, k8sClients.Clientset, cfg.Deployment, logger)
+	wasmDeployer := deployer.NewWasmCloudDeployer(k8sClients.DynamicClient, k8sClients.Clientset, cfg.Deployment, cfg.WasmCloud, logger)
 	factory.Register(api.TargetWasmCloud, wasmDeployer)
 
+	// Create wasm builder for wasmCloud target (shares PVC with Buildah builder)
+	wasmPVCName := cfg.Builder.Buildah.PVCName
+	if wasmPVCName == "" {
+		wasmPVCName = "vibed-data"
+	}
+	wasmNs := cfg.Builder.Buildah.Namespace
+	if wasmNs == "" {
+		wasmNs = cfg.Deployment.Namespace
+	}
+	wasmPVCMountPath := filepath.Dir(cfg.Storage.Local.BasePath)
+	wasmBldr := builder.NewWasmBuilder(
+		k8sClients.Clientset, cfg.WasmCloud.Builder, cfg.Registry,
+		wasmNs, wasmPVCName, wasmPVCMountPath, logger,
+	)
+
 	// Create orchestrator
-	orch := orchestrator.NewOrchestrator(cfg, detector, bldr, factory, stg, st, m, k8sClients.Clientset, logger)
+	orch := orchestrator.NewOrchestrator(cfg, detector, bldr, wasmBldr, factory, stg, st, m, k8sClients.Clientset, logger)
 
 	// Create MCP server
 	mcpServer := mcppkg.NewServer(orch, cfg.Limits)
@@ -266,15 +281,17 @@ func runHTTPServer(ctx context.Context, cfg *config.Config, mcpServer *mcp.Serve
 	mux.Handle("/mcp/", mcpHandler)
 
 	// Frontend + API
-	frontendHandler := frontend.NewHandler(orch)
+	frontendHandler := frontend.NewHandler(orch, cfg)
 	mux.Handle("/", frontendHandler)
 
-	// Build handler chain: auth (selective) → metrics → mux
+	// Build handler chain: role → auth (selective) → metrics → mux
 	var handler http.Handler = mux
 
-	// Apply auth middleware (skips health/metrics/static paths)
+	// Apply auth middleware (skips health/metrics/static paths) and role middleware
 	if cfg.Auth.Enabled {
-		handler = vibedauth.SkipAuthPaths(authMiddleware)(handler)
+		roleMap := vibedauth.BuildRoleMap(cfg.Auth.APIKeys)
+		handler = vibedauth.RoleMiddleware(roleMap)(handler)       // inner: inject role into context
+		handler = vibedauth.SkipAuthPaths(authMiddleware)(handler) // outer: authenticate first
 	}
 
 	// Apply metrics middleware (outermost — captures all requests)

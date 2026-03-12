@@ -15,23 +15,64 @@
 
 .header-left {
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  gap: 1rem;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
   gap: 1rem;
 }
 
 .logo {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   font-size: 1.75rem;
   font-weight: 700;
   color: var(--accent);
 }
 
-.logo-icon {
-  font-size: 1.5rem;
+.logo-img {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
 }
 
 .subtitle {
   color: var(--text-muted);
   font-size: 0.9rem;
+}
+
+.org-badge {
+  font-size: 0.7rem;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 500;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.admin-badge {
+  font-size: 0.65rem;
+  color: var(--yellow);
+  border: 1px solid var(--yellow);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
 }
 
 .refresh-btn {

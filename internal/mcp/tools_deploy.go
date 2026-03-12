@@ -21,7 +21,7 @@ type deployArtifactInput struct {
 func registerDeployTool(server *mcp.Server, orch *orchestrator.Orchestrator, limits config.LimitsConfig) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "deploy_artifact",
-		Description: "Deploy a web artifact (website, web app) to the cluster. Provide source files and vibeD handles building a container image and deploying it. Returns the access URL.",
+		Description: "Deploy a web artifact (website, web app) to the cluster. Provide source files and vibeD handles building a container image and deploying it. Returns the access URL. Compiled languages (Go, Rust) are automatically deployed to wasmCloud when available; other languages use Knative. Set target explicitly to override.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input deployArtifactInput) (*mcp.CallToolResult, *orchestrator.DeployResult, error) {
 		if err := validateFileLimits(input.Files, limits); err != nil {
 			return nil, nil, err

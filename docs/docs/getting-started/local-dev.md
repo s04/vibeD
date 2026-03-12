@@ -59,14 +59,22 @@ With sslip.io DNS, artifacts deployed via Knative get URLs like:
 http://my-app.default.127.0.0.1.sslip.io
 ```
 
-These resolve to `127.0.0.1` and route through Kourier on port 80.
+These resolve to `127.0.0.1` and route through the ingress layer on port 80.
 
 ### Port-Forward Access
 
-If your Kind cluster doesn't expose port 80 to the host (common with Podman), use a port-forward:
+If your Kind cluster doesn't expose port 80 to the host (common with Podman), you need to port-forward the ingress service. The command depends on which networking layer you installed:
+
+**Kourier:**
 
 ```bash
 kubectl port-forward svc/kourier 8081:80 -n kourier-system
+```
+
+**Contour (Envoy):**
+
+```bash
+kubectl port-forward svc/envoy 8081:80 -n projectcontour
 ```
 
 Then access artifacts by appending the port to the URL:
@@ -74,6 +82,24 @@ Then access artifacts by appending the port to the URL:
 ```
 http://my-app.default.127.0.0.1.sslip.io:8081
 ```
+
+:::tip Using port 80 directly
+If you want to use the default port (so URLs work without `:8081`), use `sudo` to bind to port 80:
+
+```bash
+sudo kubectl port-forward svc/envoy 80:80 -n projectcontour
+```
+:::
+
+### Accessing the vibeD MCP Endpoint
+
+To connect AI tools (like Claude Desktop) to the vibeD MCP server running in-cluster, port-forward the vibeD service:
+
+```bash
+kubectl port-forward svc/vibed 9090:8080 -n vibe-system
+```
+
+The MCP endpoint is then available at `http://localhost:9090/mcp/`. If vibeD is exposed via an HTTPProxy/Ingress (e.g. `vibed.127.0.0.1.sslip.io`), you can also reach it through the ingress port-forward on port 8081.
 
 ### DNS Troubleshooting
 

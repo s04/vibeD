@@ -1,0 +1,199 @@
+.sd-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 100;
+  padding: 2rem;
+}
+
+.sd-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+}
+
+.sd-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.sd-header h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.sd-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.5rem;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.sd-close:hover {
+  color: var(--text);
+}
+
+.sd-content {
+  padding: 1rem;
+}
+
+.sd-loading,
+.sd-empty {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  padding: 1rem 0;
+}
+
+.sd-error {
+  color: var(--red);
+  font-size: 0.8rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 4px;
+  margin-bottom: 0.75rem;
+}
+
+.sd-artifact-name {
+  font-weight: 600;
+  font-size: 1rem;
+  margin-bottom: 1rem;
+  color: var(--text);
+}
+
+.sd-section {
+  margin-bottom: 1rem;
+}
+
+.sd-section:last-child {
+  margin-bottom: 0;
+}
+
+.sd-section-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 0.5rem;
+}
+
+.sd-user-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.sd-user-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg);
+  border-radius: 5px;
+}
+
+.sd-user-name {
+  flex: 1;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.sd-user-perm {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+}
+
+.sd-remove-btn {
+  background: none;
+  border: 1px solid var(--red);
+  color: var(--red);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.sd-remove-btn:hover {
+  background: var(--red);
+  color: white;
+}
+
+.sd-remove-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sd-input-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.sd-input {
+  flex: 1;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.sd-input:focus {
+  border-color: var(--accent);
+}
+
+.sd-input::placeholder {
+  color: var(--text-muted);
+}
+
+.sd-input:disabled {
+  opacity: 0.5;
+}
+
+.sd-share-btn {
+  background: var(--accent);
+  color: white;
+  border: 1px solid var(--accent);
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+
+.sd-share-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.sd-share-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sd-hint {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 0.4rem;
+}

@@ -11,16 +11,23 @@ import (
 
 // Config holds the complete vibeD configuration.
 type Config struct {
-	Server     ServerConfig     `yaml:"server"`
-	Auth       AuthConfig       `yaml:"auth"`
-	Deployment DeploymentConfig `yaml:"deployment"`
-	Builder    BuilderConfig    `yaml:"builder"`
-	Storage    StorageConfig    `yaml:"storage"`
-	Registry   RegistryConfig   `yaml:"registry"`
-	Store      StoreConfig      `yaml:"store"`
-	Kubernetes KubernetesConfig `yaml:"kubernetes"`
-	Knative    KnativeConfig    `yaml:"knative"`
-	Limits     LimitsConfig     `yaml:"limits"`
+	Organization OrganizationConfig `yaml:"organization"`
+	Server       ServerConfig       `yaml:"server"`
+	Auth         AuthConfig         `yaml:"auth"`
+	Deployment   DeploymentConfig   `yaml:"deployment"`
+	Builder      BuilderConfig      `yaml:"builder"`
+	Storage      StorageConfig      `yaml:"storage"`
+	Registry     RegistryConfig     `yaml:"registry"`
+	Store        StoreConfig        `yaml:"store"`
+	Kubernetes   KubernetesConfig   `yaml:"kubernetes"`
+	Knative      KnativeConfig      `yaml:"knative"`
+	WasmCloud    WasmCloudConfig    `yaml:"wasmcloud"`
+	Limits       LimitsConfig       `yaml:"limits"`
+}
+
+// OrganizationConfig holds the organization identity.
+type OrganizationConfig struct {
+	Name string `yaml:"name"` // Organization display name (e.g. "Acme Corp")
 }
 
 // LimitsConfig defines resource limits for MCP tool inputs.
@@ -40,9 +47,10 @@ type AuthConfig struct {
 
 // APIKeyConf represents a configured API key with optional per-user storage.
 type APIKeyConf struct {
-	Key     string           `yaml:"key"`     // Token value or "env:VAR_NAME"
-	Name    string           `yaml:"name"`    // Human-readable name (used as UserID)
-	Scopes  []string         `yaml:"scopes"`  // Allowed scopes (empty = all)
+	Key     string           `yaml:"key"`               // Token value or "env:VAR_NAME"
+	Name    string           `yaml:"name"`              // Human-readable name (used as UserID)
+	Scopes  []string         `yaml:"scopes"`            // Allowed scopes (empty = all)
+	Role    string           `yaml:"role,omitempty"`    // "admin" or "user" (default: "user")
 	Storage *UserStorageConf `yaml:"storage,omitempty"` // Per-user storage override
 }
 
@@ -156,6 +164,19 @@ type KnativeConfig struct {
 	IngressClass string `yaml:"ingressClass"`
 }
 
+// WasmCloudConfig holds wasmCloud-specific configuration.
+type WasmCloudConfig struct {
+	LatticeID string            `yaml:"latticeId"` // wasmCloud lattice ID (default: "default")
+	Builder   WasmBuilderConfig `yaml:"builder"`
+}
+
+// WasmBuilderConfig configures the wasm component builder.
+type WasmBuilderConfig struct {
+	Image    string `yaml:"image"`    // Builder image with wash + toolchains (default: "ghcr.io/vibed/wasm-builder:latest")
+	Timeout  string `yaml:"timeout"`  // Build timeout (default: "10m")
+	Insecure bool   `yaml:"insecure"` // Allow insecure OCI registry push
+}
+
 // Default returns a Config with sensible defaults.
 func Default() *Config {
 	return &Config{
@@ -204,6 +225,13 @@ func Default() *Config {
 			DomainSuffix: "127.0.0.1.sslip.io",
 			IngressClass: "kourier.ingress.networking.knative.dev",
 		},
+		WasmCloud: WasmCloudConfig{
+			LatticeID: "default",
+			Builder: WasmBuilderConfig{
+				Image:   "ghcr.io/vibed/wasm-builder:latest",
+				Timeout: "10m",
+			},
+		},
 		Limits: LimitsConfig{
 			MaxTotalFileSize: 50 * 1024 * 1024, // 50 MB
 			MaxFileCount:     500,
@@ -241,6 +269,9 @@ func Load(path string) (*Config, error) {
 }
 
 func applyEnvOverrides(cfg *Config) {
+	if v := os.Getenv("VIBED_ORGANIZATION_NAME"); v != "" {
+		cfg.Organization.Name = v
+	}
 	if v := os.Getenv("VIBED_SERVER_TRANSPORT"); v != "" {
 		cfg.Server.Transport = v
 	}
@@ -294,6 +325,15 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("VIBED_KNATIVE_DOMAIN_SUFFIX"); v != "" {
 		cfg.Knative.DomainSuffix = v
+	}
+	if v := os.Getenv("VIBED_WASMCLOUD_LATTICE_ID"); v != "" {
+		cfg.WasmCloud.LatticeID = v
+	}
+	if v := os.Getenv("VIBED_WASMCLOUD_BUILDER_IMAGE"); v != "" {
+		cfg.WasmCloud.Builder.Image = v
+	}
+	if v := os.Getenv("VIBED_WASMCLOUD_BUILDER_INSECURE"); v != "" {
+		cfg.WasmCloud.Builder.Insecure, _ = strconv.ParseBool(v)
 	}
 
 	// Auth overrides
@@ -401,6 +441,12 @@ func validate(cfg *Config) error {
 		}
 		if (cfg.Auth.Mode == "apikey" || cfg.Auth.Mode == "") && len(cfg.Auth.APIKeys) == 0 {
 			return fmt.Errorf("at least one API key is required when auth.mode is 'apikey'")
+		}
+		validRoles := map[string]bool{"admin": true, "user": true, "": true}
+		for _, key := range cfg.Auth.APIKeys {
+			if !validRoles[key.Role] {
+				return fmt.Errorf("auth.apiKeys[%q].role must be 'admin' or 'user' (got %q)", key.Name, key.Role)
+			}
 		}
 	}
 
