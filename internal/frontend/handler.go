@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	vibedauth "github.com/vibed-project/vibeD/internal/auth"
+	"github.com/vibed-project/vibeD/internal/config"
 	"github.com/vibed-project/vibeD/internal/orchestrator"
 )
 
