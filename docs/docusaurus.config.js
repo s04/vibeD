@@ -7,7 +7,7 @@ const config = {
   url: 'https://vibed.run',
   baseUrl: '/',
   organizationName: 'vibed-project',
-  projectName: 'vibeD',
+  projectName: 'vibed-project.github.io',
   favicon: 'img/vibed.ico',
   onBrokenLinks: 'throw',
 
