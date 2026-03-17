@@ -25,6 +25,14 @@ type Config struct {
 	WasmCloud    WasmCloudConfig    `yaml:"wasmcloud"`
 	Limits       LimitsConfig       `yaml:"limits"`
 	GC           GCConfig           `yaml:"gc"`
+	Tracing      TracingConfig      `yaml:"tracing"`
+}
+
+// TracingConfig configures OpenTelemetry distributed tracing.
+type TracingConfig struct {
+	Enabled    bool    `yaml:"enabled"`    // Enable tracing (default: false)
+	Endpoint   string  `yaml:"endpoint"`   // OTLP gRPC endpoint (e.g. "http://jaeger:4317"); empty = stdout
+	SampleRate float64 `yaml:"sampleRate"` // Sampling rate 0.0–1.0 (default: 1.0)
 }
 
 // OrganizationConfig holds the organization identity.
@@ -42,9 +50,21 @@ type LimitsConfig struct {
 // AuthConfig holds authentication and TLS settings.
 type AuthConfig struct {
 	Enabled bool         `yaml:"enabled"`
-	Mode    string       `yaml:"mode"` // "apikey" or "oauth"
+	Mode    string       `yaml:"mode"` // "apikey", "oauth", or "oidc"
 	APIKeys []APIKeyConf `yaml:"apiKeys"`
+	OIDC    OIDCConfig   `yaml:"oidc"`
 	TLS     TLSConf      `yaml:"tls"`
+}
+
+// OIDCConfig configures OIDC (OpenID Connect) authentication.
+type OIDCConfig struct {
+	Issuer        string   `yaml:"issuer"`        // OIDC issuer URL (e.g. "https://keycloak.example.com/realms/vibed")
+	Audience      string   `yaml:"audience"`      // Expected audience claim (e.g. "vibed")
+	UsernameClaim string   `yaml:"usernameClaim"` // JWT claim for username (default: "preferred_username")
+	EmailClaim    string   `yaml:"emailClaim"`    // JWT claim for email (default: "email")
+	RoleClaim     string   `yaml:"roleClaim"`     // JWT claim path for roles (default: "realm_access.roles")
+	AdminRole     string   `yaml:"adminRole"`     // Role value that maps to vibeD admin (default: "vibed-admin")
+	Scopes        []string `yaml:"scopes"`        // Scopes to advertise (default: ["openid", "profile"])
 }
 
 // APIKeyConf represents a configured API key with optional per-user storage.
@@ -88,10 +108,18 @@ type TLSConf struct {
 }
 
 type ServerConfig struct {
-	Transport string `yaml:"transport"` // "stdio", "http", or "both"
-	HTTPAddr  string `yaml:"httpAddr"`
-	LogFormat string `yaml:"logFormat"` // "text" (default) or "json"
-	LogLevel  string `yaml:"logLevel"`  // "debug", "info" (default), "warn", "error"
+	Transport string          `yaml:"transport"` // "stdio", "http", or "both"
+	HTTPAddr  string          `yaml:"httpAddr"`
+	LogFormat string          `yaml:"logFormat"` // "text" (default) or "json"
+	LogLevel  string          `yaml:"logLevel"`  // "debug", "info" (default), "warn", "error"
+	RateLimit RateLimitConfig `yaml:"rateLimit"`
+}
+
+// RateLimitConfig configures HTTP rate limiting per client.
+type RateLimitConfig struct {
+	Enabled           bool    `yaml:"enabled"`           // Enable rate limiting (default: false)
+	RequestsPerSecond float64 `yaml:"requestsPerSecond"` // Steady-state rate per client (default: 10)
+	Burst             int     `yaml:"burst"`             // Max burst size per client (default: 20)
 }
 
 type DeploymentConfig struct {
@@ -205,6 +233,10 @@ func Default() *Config {
 			HTTPAddr:  ":8080",
 			LogFormat: "text",
 			LogLevel:  "info",
+			RateLimit: RateLimitConfig{
+				RequestsPerSecond: 10,
+				Burst:             20,
+			},
 		},
 		Deployment: DeploymentConfig{
 			PreferredTarget: "auto",
@@ -267,6 +299,9 @@ func Default() *Config {
 			Interval: "1h",
 			MaxAge:   "24h",
 			DryRun:   false,
+		},
+		Tracing: TracingConfig{
+			SampleRate: 1.0,
 		},
 	}
 }
@@ -400,6 +435,17 @@ func applyEnvOverrides(cfg *Config) {
 		})
 	}
 
+	// OIDC overrides
+	if v := os.Getenv("VIBED_AUTH_OIDC_ISSUER"); v != "" {
+		cfg.Auth.OIDC.Issuer = v
+	}
+	if v := os.Getenv("VIBED_AUTH_OIDC_AUDIENCE"); v != "" {
+		cfg.Auth.OIDC.Audience = v
+	}
+	if v := os.Getenv("VIBED_AUTH_OIDC_ADMIN_ROLE"); v != "" {
+		cfg.Auth.OIDC.AdminRole = v
+	}
+
 	// TLS overrides
 	if v := os.Getenv("VIBED_TLS_ENABLED"); v != "" {
 		cfg.Auth.TLS.Enabled, _ = strconv.ParseBool(v)
@@ -443,6 +489,38 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("VIBED_GC_DRY_RUN"); v != "" {
 		cfg.GC.DryRun, _ = strconv.ParseBool(v)
+	}
+
+	// Tracing overrides (standard OTel env var takes precedence)
+	if v := os.Getenv("VIBED_TRACING_ENABLED"); v != "" {
+		cfg.Tracing.Enabled, _ = strconv.ParseBool(v)
+	}
+	if v := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); v != "" {
+		cfg.Tracing.Endpoint = v
+		cfg.Tracing.Enabled = true
+	}
+	if v := os.Getenv("VIBED_TRACING_ENDPOINT"); v != "" {
+		cfg.Tracing.Endpoint = v
+	}
+	if v := os.Getenv("VIBED_TRACING_SAMPLE_RATE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Tracing.SampleRate = f
+		}
+	}
+
+	// Rate limit overrides
+	if v := os.Getenv("VIBED_RATE_LIMIT_ENABLED"); v != "" {
+		cfg.Server.RateLimit.Enabled, _ = strconv.ParseBool(v)
+	}
+	if v := os.Getenv("VIBED_RATE_LIMIT_RPS"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			cfg.Server.RateLimit.RequestsPerSecond = f
+		}
+	}
+	if v := os.Getenv("VIBED_RATE_LIMIT_BURST"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Server.RateLimit.Burst = n
+		}
 	}
 }
 
@@ -507,12 +585,20 @@ func validate(cfg *Config) error {
 
 	// Validate auth config
 	if cfg.Auth.Enabled {
-		validModes := map[string]bool{"apikey": true, "oauth": true, "": true}
+		validModes := map[string]bool{"apikey": true, "oauth": true, "oidc": true, "": true}
 		if !validModes[cfg.Auth.Mode] {
-			return fmt.Errorf("auth.mode must be one of: apikey, oauth (got %q)", cfg.Auth.Mode)
+			return fmt.Errorf("auth.mode must be one of: apikey, oauth, oidc (got %q)", cfg.Auth.Mode)
 		}
 		if (cfg.Auth.Mode == "apikey" || cfg.Auth.Mode == "") && len(cfg.Auth.APIKeys) == 0 {
 			return fmt.Errorf("at least one API key is required when auth.mode is 'apikey'")
+		}
+		if cfg.Auth.Mode == "oidc" {
+			if cfg.Auth.OIDC.Issuer == "" {
+				return fmt.Errorf("auth.oidc.issuer is required when auth.mode is 'oidc'")
+			}
+			if cfg.Auth.OIDC.Audience == "" {
+				return fmt.Errorf("auth.oidc.audience is required when auth.mode is 'oidc' (prevents cross-app token reuse)")
+			}
 		}
 		validRoles := map[string]bool{"admin": true, "user": true, "": true}
 		for _, key := range cfg.Auth.APIKeys {

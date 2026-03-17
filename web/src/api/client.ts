@@ -68,12 +68,21 @@ async function fetchWithTimeout(url: string, opts?: RequestInit): Promise<Respon
   }
 }
 
-export async function fetchArtifacts(status?: string): Promise<ArtifactSummary[]> {
-  const params = status ? `?status=${status}` : '';
-  const res = await fetchWithTimeout(`${BASE}/api/artifacts${params}`);
+export interface ArtifactListResult {
+  artifacts: ArtifactSummary[];
+  total: number;
+}
+
+export async function fetchArtifacts(status?: string, offset = 0, limit = 50): Promise<ArtifactListResult> {
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  if (offset > 0) params.set('offset', String(offset));
+  if (limit !== 50) params.set('limit', String(limit));
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetchWithTimeout(`${BASE}/api/artifacts${qs}`);
   if (!res.ok) throw new Error(`Failed to fetch artifacts: ${res.statusText}`);
   const data = await res.json();
-  return data ?? [];
+  return { artifacts: data?.artifacts ?? [], total: data?.total ?? 0 };
 }
 
 export async function fetchArtifact(id: string): Promise<Artifact> {

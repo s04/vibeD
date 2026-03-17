@@ -119,7 +119,12 @@ func (b *WasmBuilder) Build(ctx context.Context, req BuildRequest) (*BuildResult
 	}
 	jobName := fmt.Sprintf("vibed-wasm-%s", shortID)
 
-	// 5. Build the wash build + push command
+	// 5. Validate image name to prevent shell injection
+	if err := validateImageName(req.ImageName); err != nil {
+		return nil, fmt.Errorf("invalid image name: %w", err)
+	}
+
+	// 6. Build the wash build + push command
 	insecureFlag := ""
 	if b.insecure {
 		insecureFlag = "--insecure"
@@ -157,6 +162,7 @@ func (b *WasmBuilder) Build(ctx context.Context, req BuildRequest) (*BuildResult
 									Name:      "source",
 									MountPath: "/workspace",
 									SubPath:   subPath,
+									ReadOnly:  true,
 								},
 							},
 						},

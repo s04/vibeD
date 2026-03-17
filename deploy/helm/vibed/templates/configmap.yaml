@@ -9,6 +9,10 @@ data:
     server:
       transport: {{ .Values.config.server.transport | quote }}
       httpAddr: {{ .Values.config.server.httpAddr | quote }}
+      rateLimit:
+        enabled: {{ .Values.config.server.rateLimit.enabled | default false }}
+        requestsPerSecond: {{ .Values.config.server.rateLimit.requestsPerSecond | default 10 }}
+        burst: {{ int (.Values.config.server.rateLimit.burst | default 20) }}
     {{- if .Values.auth.enabled }}
     auth:
       enabled: true
@@ -17,6 +21,19 @@ data:
       apiKeys:
         - key: "env:VIBED_AUTH_API_KEY"
           name: "helm-configured"
+      {{- end }}
+      {{- if eq .Values.auth.mode "oidc" }}
+      oidc:
+        issuer: {{ .Values.auth.oidc.issuer | quote }}
+        audience: {{ .Values.auth.oidc.audience | quote }}
+        usernameClaim: {{ .Values.auth.oidc.usernameClaim | quote }}
+        emailClaim: {{ .Values.auth.oidc.emailClaim | quote }}
+        roleClaim: {{ .Values.auth.oidc.roleClaim | quote }}
+        adminRole: {{ .Values.auth.oidc.adminRole | quote }}
+        scopes:
+        {{- range .Values.auth.oidc.scopes }}
+          - {{ . | quote }}
+        {{- end }}
       {{- end }}
       {{- if .Values.auth.tls.enabled }}
       tls:
@@ -64,3 +81,7 @@ data:
       maxTotalFileSize: {{ int .Values.config.limits.maxTotalFileSize }}
       maxFileCount: {{ int .Values.config.limits.maxFileCount }}
       maxLogLines: {{ int .Values.config.limits.maxLogLines }}
+    tracing:
+      enabled: {{ .Values.config.tracing.enabled | default false }}
+      endpoint: {{ .Values.config.tracing.endpoint | default "" | quote }}
+      sampleRate: {{ .Values.config.tracing.sampleRate | default 1.0 }}

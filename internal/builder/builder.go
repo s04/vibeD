@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 
 	"github.com/vibed-project/vibeD/internal/config"
 
@@ -91,6 +92,24 @@ func (b *PackBuilder) Build(ctx context.Context, req BuildRequest) (*BuildResult
 	return &BuildResult{
 		ImageRef: req.ImageName,
 	}, nil
+}
+
+// validImageName matches standard OCI image references: registry/repo:tag or registry/repo
+// Rejects characters that could be used for shell injection (spaces, semicolons, backticks, etc.)
+var validImageName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$`)
+
+// validateImageName ensures an image name is safe to use in shell commands.
+func validateImageName(name string) error {
+	if name == "" {
+		return fmt.Errorf("image name is required")
+	}
+	if len(name) > 512 {
+		return fmt.Errorf("image name too long (max 512 chars)")
+	}
+	if !validImageName.MatchString(name) {
+		return fmt.Errorf("image name %q contains invalid characters", name)
+	}
+	return nil
 }
 
 func parsePullPolicy(policy string) (image.PullPolicy, error) {

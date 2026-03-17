@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	vibedauth "github.com/vibed-project/vibeD/internal/auth"
 	"github.com/vibed-project/vibeD/internal/builder"
@@ -21,6 +24,11 @@ import (
 	"github.com/vibed-project/vibeD/internal/storage"
 	"github.com/vibed-project/vibeD/internal/store"
 	"github.com/vibed-project/vibeD/pkg/api"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -69,9 +77,11 @@ type Orchestrator struct {
 	store       store.ArtifactStore
 	metrics     *metrics.Metrics
 	clientset   kubernetes.Interface
-	events      *events.EventBus
-	imageBase   string
-	logger      *slog.Logger
+	events         *events.EventBus
+	shareLinkStore store.ShareLinkStore
+	imageBase      string
+	tracer         trace.Tracer
+	logger         *slog.Logger
 }
 
 // NewOrchestrator creates a new Orchestrator with all subsystems wired.
@@ -86,6 +96,7 @@ func NewOrchestrator(
 	m *metrics.Metrics,
 	clientset kubernetes.Interface,
 	bus *events.EventBus,
+	shareLinkStore store.ShareLinkStore,
 	logger *slog.Logger,
 ) *Orchestrator {
 	imageBase := "vibed-artifacts"
@@ -103,14 +114,33 @@ func NewOrchestrator(
 		store:       st,
 		metrics:     m,
 		clientset:   clientset,
-		events:      bus,
-		imageBase:   imageBase,
+		events:         bus,
+		shareLinkStore: shareLinkStore,
+		imageBase:      imageBase,
+		tracer:         otel.Tracer("vibed/orchestrator"),
 		logger:      logger,
 	}
 }
 
 // Deploy handles the full deployment flow: validate → store → build → deploy.
 func (o *Orchestrator) Deploy(ctx context.Context, req DeployRequest) (*DeployResult, error) {
+	ctx, span := o.tracer.Start(ctx, "orchestrator.Deploy",
+		trace.WithAttributes(
+			attribute.String("artifact.name", req.Name),
+			attribute.String("artifact.language", req.Language),
+			attribute.String("artifact.target", req.Target),
+		))
+	defer span.End()
+
+	result, err := o.doDeploy(ctx, req)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return result, err
+}
+
+func (o *Orchestrator) doDeploy(ctx context.Context, req DeployRequest) (*DeployResult, error) {
 	// 1. Validate input
 	if err := validateName(req.Name); err != nil {
 		return nil, err
@@ -326,6 +356,19 @@ func (o *Orchestrator) Deploy(ctx context.Context, req DeployRequest) (*DeployRe
 
 // Update rebuilds and redeploys an existing artifact.
 func (o *Orchestrator) Update(ctx context.Context, req UpdateRequest) (*DeployResult, error) {
+	ctx, span := o.tracer.Start(ctx, "orchestrator.Update",
+		trace.WithAttributes(attribute.String("artifact.id", req.ArtifactID)))
+	defer span.End()
+
+	result, err := o.doUpdate(ctx, req)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return result, err
+}
+
+func (o *Orchestrator) doUpdate(ctx context.Context, req UpdateRequest) (*DeployResult, error) {
 	artifact, err := o.store.Get(ctx, req.ArtifactID)
 	if err != nil {
 		return nil, err
@@ -470,6 +513,10 @@ func (o *Orchestrator) Update(ctx context.Context, req UpdateRequest) (*DeployRe
 
 // Delete stops and removes a deployed artifact.
 func (o *Orchestrator) Delete(ctx context.Context, artifactID string) error {
+	ctx, span := o.tracer.Start(ctx, "orchestrator.Delete",
+		trace.WithAttributes(attribute.String("artifact.id", artifactID)))
+	defer span.End()
+
 	artifact, err := o.store.Get(ctx, artifactID)
 	if err != nil {
 		o.metrics.DeletesTotal.WithLabelValues("failed").Inc()
@@ -518,13 +565,24 @@ func (o *Orchestrator) Status(ctx context.Context, artifactID string) (*api.Arti
 	return artifact, nil
 }
 
-// List returns all artifacts matching the filter, scoped to the authenticated user.
-// Admins see all artifacts. Regular users see owned + shared artifacts.
-// When auth is disabled (no user in context), all artifacts are returned.
-func (o *Orchestrator) List(ctx context.Context, statusFilter string) ([]api.ArtifactSummary, error) {
-	ownerID := vibedauth.UserIDFromContext(ctx)
-	adminView := vibedauth.IsAdmin(ctx)
-	return o.store.List(ctx, statusFilter, ownerID, adminView)
+// List returns artifacts matching the filter with pagination, scoped to the authenticated user.
+func (o *Orchestrator) List(ctx context.Context, statusFilter string, offset, limit int) (*store.ListResult, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return o.store.List(ctx, store.ListOptions{
+		StatusFilter: statusFilter,
+		OwnerID:      vibedauth.UserIDFromContext(ctx),
+		AdminView:    vibedauth.IsAdmin(ctx),
+		Offset:       offset,
+		Limit:        limit,
+	})
 }
 
 // Logs returns recent log lines from a deployed artifact.
@@ -633,6 +691,7 @@ func (o *Orchestrator) publishStatusEvent(artifact *api.Artifact) {
 	o.events.Publish(events.Event{
 		Type:       events.ArtifactStatusChanged,
 		ArtifactID: artifact.ID,
+		OwnerID:    artifact.OwnerID,
 		Status:     string(artifact.Status),
 		Error:      artifact.Error,
 		Timestamp:  artifact.UpdatedAt,
@@ -697,12 +756,11 @@ func isWasmCapable(lang string) bool {
 }
 
 func generateID() string {
-	b := make([]byte, 8)
+	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback to timestamp-based ID if crypto/rand fails
-		return fmt.Sprintf("%x", time.Now().UnixNano())
+		panic("crypto/rand unavailable: " + err.Error())
 	}
-	return fmt.Sprintf("%x", b)
+	return hex.EncodeToString(b)
 }
 
 const staticNginxConf = `server {
@@ -947,8 +1005,16 @@ func (o *Orchestrator) ListVersions(ctx context.Context, artifactID string) ([]a
 // Rollback redeploys an artifact using a previous version's image and config.
 // It creates a new version entry for the rollback (does not rewind history).
 func (o *Orchestrator) Rollback(ctx context.Context, artifactID string, targetVersion int) (*DeployResult, error) {
+	ctx, span := o.tracer.Start(ctx, "orchestrator.Rollback",
+		trace.WithAttributes(
+			attribute.String("artifact.id", artifactID),
+			attribute.Int("target_version", targetVersion)))
+	defer span.End()
+
 	artifact, err := o.store.Get(ctx, artifactID)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
 	if err := o.checkWriteOwnership(ctx, artifact); err != nil {
@@ -1086,4 +1152,125 @@ func (o *Orchestrator) UnshareArtifact(ctx context.Context, artifactID string, u
 
 	artifact.UpdatedAt = time.Now()
 	return o.store.Update(ctx, artifact)
+}
+
+// --- Share Link methods ---
+
+// CreateShareLink generates a public share link for an artifact.
+func (o *Orchestrator) CreateShareLink(ctx context.Context, artifactID, password string, expiresIn time.Duration) (*api.ShareLink, error) {
+	if o.shareLinkStore == nil {
+		return nil, fmt.Errorf("share links require SQLite store backend")
+	}
+
+	artifact, err := o.store.Get(ctx, artifactID)
+	if err != nil {
+		return nil, err
+	}
+	if err := o.checkWriteOwnership(ctx, artifact); err != nil {
+		return nil, err
+	}
+
+	// Generate 32-byte crypto-random token
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return nil, fmt.Errorf("generating token: %w", err)
+	}
+	token := hex.EncodeToString(tokenBytes)
+
+	// Hash password if provided
+	var passwordHash string
+	if password != "" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		if err != nil {
+			return nil, fmt.Errorf("hashing password: %w", err)
+		}
+		passwordHash = string(hash)
+	}
+
+	now := time.Now()
+	link := &api.ShareLink{
+		Token:       token,
+		ArtifactID:  artifactID,
+		CreatedBy:   vibedauth.UserIDFromContext(ctx),
+		HasPassword: password != "",
+		CreatedAt:   now,
+	}
+	if expiresIn > 0 {
+		exp := now.Add(expiresIn)
+		link.ExpiresAt = &exp
+	}
+
+	if err := o.shareLinkStore.CreateShareLink(ctx, link, passwordHash); err != nil {
+		return nil, err
+	}
+
+	return link, nil
+}
+
+// ListShareLinks returns all share links for an artifact.
+func (o *Orchestrator) ListShareLinks(ctx context.Context, artifactID string) ([]api.ShareLink, error) {
+	if o.shareLinkStore == nil {
+		return nil, fmt.Errorf("share links require SQLite store backend")
+	}
+
+	artifact, err := o.store.Get(ctx, artifactID)
+	if err != nil {
+		return nil, err
+	}
+	if err := o.checkOwnership(ctx, artifact); err != nil {
+		return nil, err
+	}
+	return o.shareLinkStore.ListShareLinks(ctx, artifactID)
+}
+
+// RevokeShareLink revokes a share link.
+func (o *Orchestrator) RevokeShareLink(ctx context.Context, token string) error {
+	if o.shareLinkStore == nil {
+		return fmt.Errorf("share links require SQLite store backend")
+	}
+
+	link, _, err := o.shareLinkStore.GetShareLink(ctx, token)
+	if err != nil {
+		return err
+	}
+	artifact, err := o.store.Get(ctx, link.ArtifactID)
+	if err != nil {
+		return err
+	}
+	if err := o.checkWriteOwnership(ctx, artifact); err != nil {
+		return err
+	}
+	return o.shareLinkStore.RevokeShareLink(ctx, token)
+}
+
+// ResolveShareLink validates a share link token and optional password, returns read-only artifact view.
+func (o *Orchestrator) ResolveShareLink(ctx context.Context, token, password string) (*api.Artifact, error) {
+	if o.shareLinkStore == nil {
+		return nil, fmt.Errorf("share links require SQLite store backend")
+	}
+
+	link, passwordHash, err := o.shareLinkStore.GetShareLink(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+
+	// Revoked or expired links return not-found (no information leakage)
+	if link.Revoked {
+		return nil, &api.ErrShareLinkNotFound{Token: token}
+	}
+	if link.ExpiresAt != nil && time.Now().After(*link.ExpiresAt) {
+		return nil, &api.ErrShareLinkNotFound{Token: token}
+	}
+
+	// Check password
+	if passwordHash != "" {
+		if password == "" {
+			return nil, &api.ErrPasswordRequired{}
+		}
+		if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)); err != nil {
+			return nil, &api.ErrPasswordRequired{}
+		}
+	}
+
+	return o.store.Get(ctx, link.ArtifactID)
 }

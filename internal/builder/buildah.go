@@ -101,7 +101,12 @@ func (b *BuildahBuilder) Build(ctx context.Context, req BuildRequest) (*BuildRes
 	}
 	jobName := fmt.Sprintf("vibed-build-%s", shortID)
 
-	// 4. Build the Buildah command
+	// 4. Validate image name to prevent shell injection
+	if err := validateImageName(req.ImageName); err != nil {
+		return nil, fmt.Errorf("invalid image name: %w", err)
+	}
+
+	// 5. Build the Buildah command
 	tlsVerify := "true"
 	if b.insecure {
 		tlsVerify = "false"

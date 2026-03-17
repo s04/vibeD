@@ -29,6 +29,7 @@ function App() {
   const [currentUser, setCurrentUser] = useState<string>('')
   const [isAdmin, setIsAdmin] = useState(false)
   const [orgName, setOrgName] = useState<string>('')
+  const [totalArtifacts, setTotalArtifacts] = useState(0)
 
   // Fetch user identity and org info on mount
   useEffect(() => {
@@ -52,8 +53,9 @@ function App() {
     try {
       setLoading(true)
       setError(null)
-      const [arts, tgts] = await Promise.all([fetchArtifacts(), fetchTargets()])
-      setArtifacts(arts)
+      const [result, tgts] = await Promise.all([fetchArtifacts(), fetchTargets()])
+      setArtifacts(result.artifacts)
+      setTotalArtifacts(result.total)
       setTargets(tgts)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load data')
@@ -61,6 +63,16 @@ function App() {
       setLoading(false)
     }
   }, [])
+
+  const loadMore = useCallback(async () => {
+    try {
+      const result = await fetchArtifacts(undefined, artifacts.length)
+      setArtifacts((prev) => [...prev, ...result.artifacts])
+      setTotalArtifacts(result.total)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load more')
+    }
+  }, [artifacts.length])
 
   const handleDelete = useCallback(async (id: string) => {
     await deleteArtifact(id)
@@ -172,6 +184,11 @@ function App() {
             onShare={(id) => setShareArtifactId(id)}
             onDelete={handleDelete}
           />
+          {artifacts.length < totalArtifacts && (
+            <button className="load-more-btn" onClick={loadMore}>
+              Load more ({artifacts.length} of {totalArtifacts})
+            </button>
+          )}
         </section>
       </main>
 
