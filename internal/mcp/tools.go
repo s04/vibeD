@@ -27,5 +27,7 @@ func RegisterTools(server *mcp.Server, orch *orchestrator.Orchestrator, limits c
 	if userStore != nil {
 		registerListUsersTool(server, userStore)
 		registerGetUserTool(server, userStore)
+		registerListDepartmentsTool(server, userStore)
+		registerCreateDepartmentTool(server, userStore)
 	}
 }

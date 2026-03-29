@@ -45,7 +45,7 @@ auth:
     autoTLS: false            # Auto-generate self-signed cert (dev only)
 
 deployment:
-  preferredTarget: "auto"     # auto | knative | kubernetes | wasmcloud
+  preferredTarget: "auto"     # auto | knative | kubernetes
   namespace: "default"        # K8s namespace for deployed artifacts
 
 builder:

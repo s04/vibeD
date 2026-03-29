@@ -92,7 +92,7 @@ The `client_type` label is `apikey` when the client is authenticated or `ip` whe
 |-------|----------------|
 | `status` | `success`, `error` |
 | `language` | `nodejs`, `python`, `go`, `static` |
-| `target` | `knative`, `kubernetes`, `wasmcloud` |
+| `target` | `knative`, `kubernetes` |
 | `tool` | `deploy_artifact`, `update_artifact`, `list_artifacts`, `get_artifact_status`, `get_artifact_logs`, `delete_artifact`, `list_deployment_targets` |
 
 ## Scraping with Prometheus

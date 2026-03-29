@@ -1,8 +1,12 @@
 package frontend
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"strconv"
@@ -57,10 +61,16 @@ func NewHandler(orch *orchestrator.Orchestrator, cfg *config.Config, bus *events
 	mux.HandleFunc("/api/organization", handleOrganization(cfg))
 	mux.HandleFunc("/api/users", handleUsers(userStore))
 	mux.HandleFunc("/api/users/", handleUserDetail(userStore))
+	mux.HandleFunc("/api/departments", handleDepartments(userStore))
+	mux.HandleFunc("/api/departments/", handleDepartmentDetail(userStore))
 
 	// Share link routes (public — auth bypassed in SkipAuthPaths)
 	mux.HandleFunc("/api/share/", handlePublicShareLink(orch))
 	mux.HandleFunc("/api/share-links/", handleShareLinkRevoke(orch))
+
+	// Browser-friendly share link page — serves the SPA so React renders ShareLinkPage.
+	// The React app detects /share/<token> and calls /api/share/<token> as JSON.
+	mux.HandleFunc("/share/", handleSPAIndex())
 
 	// Serve static frontend files
 	staticFS, _ := fs.Sub(StaticFiles, "static")
@@ -304,6 +314,21 @@ func handleWhoami(userStore store.UserStore) http.HandlerFunc {
 			}
 		}
 
+		// When auth is disabled there is no authenticated identity.
+		// Return a synthetic guest admin so the dashboard profile and admin
+		// panel are always visible in no-auth mode.
+		if userID == "" {
+			json.NewEncoder(w).Encode(map[string]string{
+				"user_id":  "guest",
+				"id":       "guest",
+				"name":     "Guest",
+				"role":     "admin",
+				"status":   "active",
+				"provider": "local",
+			})
+			return
+		}
+
 		json.NewEncoder(w).Encode(map[string]string{
 			"user_id": userID,
 			"role":    role,
@@ -333,7 +358,8 @@ func handleUsers(userStore store.UserStore) http.HandlerFunc {
 
 		switch r.Method {
 		case http.MethodGet:
-			users, err := userStore.ListUsers(r.Context())
+			departmentID := r.URL.Query().Get("department")
+			users, err := userStore.ListUsers(r.Context(), departmentID)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -343,9 +369,10 @@ func handleUsers(userStore store.UserStore) http.HandlerFunc {
 
 		case http.MethodPost:
 			var body struct {
-				Name  string `json:"name"`
-				Email string `json:"email"`
-				Role  string `json:"role"`
+				Name         string `json:"name"`
+				Email        string `json:"email"`
+				Role         string `json:"role"`
+				DepartmentID string `json:"department_id"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -359,16 +386,29 @@ func handleUsers(userStore store.UserStore) http.HandlerFunc {
 			if role == "" {
 				role = "user"
 			}
+
+			// Generate API key
+			keyBytes := make([]byte, 32)
+			if _, err := rand.Read(keyBytes); err != nil {
+				http.Error(w, "failed to generate API key", http.StatusInternalServerError)
+				return
+			}
+			plainKey := "vibed_" + hex.EncodeToString(keyBytes)
+			hash := sha256.Sum256([]byte(plainKey))
+			keyHash := hex.EncodeToString(hash[:])
+
 			now := time.Now()
 			user := &api.User{
-				ID:        fmt.Sprintf("u-%x", now.UnixNano()),
-				Name:      body.Name,
-				Email:     body.Email,
-				Role:      role,
-				Status:    "active",
-				Provider:  "local",
-				CreatedAt: now,
-				UpdatedAt: now,
+				ID:           fmt.Sprintf("u-%x", now.UnixNano()),
+				Name:         body.Name,
+				Email:        body.Email,
+				Role:         role,
+				Status:       "active",
+				Provider:     "local",
+				DepartmentID: body.DepartmentID,
+				APIKeyHash:   keyHash,
+				CreatedAt:    now,
+				UpdatedAt:    now,
 			}
 			if err := userStore.CreateUser(r.Context(), user); err != nil {
 				http.Error(w, err.Error(), http.StatusConflict)
@@ -376,7 +416,7 @@ func handleUsers(userStore store.UserStore) http.HandlerFunc {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(user)
+			json.NewEncoder(w).Encode(api.UserWithKey{User: *user, APIKey: plainKey})
 
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -425,8 +465,9 @@ func handleUserDetail(userStore store.UserStore) http.HandlerFunc {
 				return
 			}
 			var body struct {
-				Role   *string `json:"role"`
-				Status *string `json:"status"`
+				Role         *string `json:"role"`
+				Status       *string `json:"status"`
+				DepartmentID *string `json:"department_id"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -437,6 +478,9 @@ func handleUserDetail(userStore store.UserStore) http.HandlerFunc {
 			}
 			if body.Status != nil {
 				user.Status = *body.Status
+			}
+			if body.DepartmentID != nil {
+				user.DepartmentID = *body.DepartmentID
 			}
 			user.UpdatedAt = time.Now()
 			if err := userStore.UpdateUser(r.Context(), user); err != nil {
@@ -471,7 +515,154 @@ func handleUserDetail(userStore store.UserStore) http.HandlerFunc {
 	}
 }
 
+// --- Department handlers ---
+
+func handleDepartments(userStore store.UserStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if userStore == nil {
+			http.Error(w, "user management not available", http.StatusServiceUnavailable)
+			return
+		}
+		if !vibedauth.IsAdmin(r.Context()) {
+			http.Error(w, "admin access required", http.StatusForbidden)
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			depts, err := userStore.ListDepartments(r.Context())
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if depts == nil {
+				depts = []api.Department{}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(depts)
+
+		case http.MethodPost:
+			var body struct {
+				Name string `json:"name"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid request body", http.StatusBadRequest)
+				return
+			}
+			if body.Name == "" {
+				http.Error(w, "name is required", http.StatusBadRequest)
+				return
+			}
+			now := time.Now()
+			dept := &api.Department{
+				ID:        fmt.Sprintf("dept-%x", now.UnixNano()),
+				Name:      body.Name,
+				CreatedAt: now,
+				UpdatedAt: now,
+			}
+			if err := userStore.CreateDepartment(r.Context(), dept); err != nil {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(dept)
+
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func handleDepartmentDetail(userStore store.UserStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if userStore == nil {
+			http.Error(w, "user management not available", http.StatusServiceUnavailable)
+			return
+		}
+		if !vibedauth.IsAdmin(r.Context()) {
+			http.Error(w, "admin access required", http.StatusForbidden)
+			return
+		}
+
+		deptID := strings.TrimPrefix(r.URL.Path, "/api/departments/")
+		if deptID == "" {
+			http.Error(w, "department ID required", http.StatusBadRequest)
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			dept, err := userStore.GetDepartment(r.Context(), deptID)
+			if err != nil {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(dept)
+
+		case http.MethodPatch:
+			dept, err := userStore.GetDepartment(r.Context(), deptID)
+			if err != nil {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			var body struct {
+				Name *string `json:"name"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid request body", http.StatusBadRequest)
+				return
+			}
+			if body.Name != nil {
+				dept.Name = *body.Name
+			}
+			dept.UpdatedAt = time.Now()
+			if err := userStore.UpdateDepartment(r.Context(), dept); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(dept)
+
+		case http.MethodDelete:
+			if err := userStore.DeleteDepartment(r.Context(), deptID); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
 // --- Share Link handlers ---
+
+// handleSPAIndex serves the React SPA index.html for browser-navigated routes
+// that need the frontend app (e.g. /share/<token>).
+func handleSPAIndex() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		staticFS, err := fs.Sub(StaticFiles, "static")
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		f, err := staticFS.Open("index.html")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer f.Close()
+		stat, _ := f.Stat()
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		http.ServeContent(w, r, "index.html", stat.ModTime(), f.(interface {
+			io.ReadSeeker
+		}))
+	}
+}
 
 // POST /api/artifacts/{id}/share-link — create a share link
 func handleArtifactShareLink(orch *orchestrator.Orchestrator, artifactID string, w http.ResponseWriter, r *http.Request) {

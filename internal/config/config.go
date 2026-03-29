@@ -22,7 +22,6 @@ type Config struct {
 	Store        StoreConfig        `yaml:"store"`
 	Kubernetes   KubernetesConfig   `yaml:"kubernetes"`
 	Knative      KnativeConfig      `yaml:"knative"`
-	WasmCloud    WasmCloudConfig    `yaml:"wasmcloud"`
 	Limits       LimitsConfig       `yaml:"limits"`
 	GC           GCConfig           `yaml:"gc"`
 	Tracing      TracingConfig      `yaml:"tracing"`
@@ -58,22 +57,24 @@ type AuthConfig struct {
 
 // OIDCConfig configures OIDC (OpenID Connect) authentication.
 type OIDCConfig struct {
-	Issuer        string   `yaml:"issuer"`        // OIDC issuer URL (e.g. "https://keycloak.example.com/realms/vibed")
-	Audience      string   `yaml:"audience"`      // Expected audience claim (e.g. "vibed")
-	UsernameClaim string   `yaml:"usernameClaim"` // JWT claim for username (default: "preferred_username")
-	EmailClaim    string   `yaml:"emailClaim"`    // JWT claim for email (default: "email")
-	RoleClaim     string   `yaml:"roleClaim"`     // JWT claim path for roles (default: "realm_access.roles")
-	AdminRole     string   `yaml:"adminRole"`     // Role value that maps to vibeD admin (default: "vibed-admin")
-	Scopes        []string `yaml:"scopes"`        // Scopes to advertise (default: ["openid", "profile"])
+	Issuer          string   `yaml:"issuer"`          // OIDC issuer URL (e.g. "https://keycloak.example.com/realms/vibed")
+	Audience        string   `yaml:"audience"`        // Expected audience claim (e.g. "vibed")
+	UsernameClaim   string   `yaml:"usernameClaim"`   // JWT claim for username (default: "preferred_username")
+	EmailClaim      string   `yaml:"emailClaim"`      // JWT claim for email (default: "email")
+	RoleClaim       string   `yaml:"roleClaim"`       // JWT claim path for roles (default: "realm_access.roles")
+	AdminRole       string   `yaml:"adminRole"`       // Role value that maps to vibeD admin (default: "vibed-admin")
+	DepartmentClaim string   `yaml:"departmentClaim"` // JWT claim for department name (e.g. "department")
+	Scopes          []string `yaml:"scopes"`          // Scopes to advertise (default: ["openid", "profile"])
 }
 
 // APIKeyConf represents a configured API key with optional per-user storage.
 type APIKeyConf struct {
-	Key     string           `yaml:"key"`               // Token value or "env:VAR_NAME"
-	Name    string           `yaml:"name"`              // Human-readable name (used as UserID)
-	Scopes  []string         `yaml:"scopes"`            // Allowed scopes (empty = all)
-	Role    string           `yaml:"role,omitempty"`    // "admin" or "user" (default: "user")
-	Storage *UserStorageConf `yaml:"storage,omitempty"` // Per-user storage override
+	Key        string           `yaml:"key"`                  // Token value or "env:VAR_NAME"
+	Name       string           `yaml:"name"`                 // Human-readable name (used as UserID)
+	Scopes     []string         `yaml:"scopes"`               // Allowed scopes (empty = all)
+	Role       string           `yaml:"role,omitempty"`       // "admin" or "user" (default: "user")
+	Department string           `yaml:"department,omitempty"` // Auto-assign to this department on provisioning
+	Storage    *UserStorageConf `yaml:"storage,omitempty"`    // Per-user storage override
 }
 
 // UserStorageConf configures per-user artifact storage.
@@ -110,6 +111,7 @@ type TLSConf struct {
 type ServerConfig struct {
 	Transport string          `yaml:"transport"` // "stdio", "http", or "both"
 	HTTPAddr  string          `yaml:"httpAddr"`
+	BaseURL   string          `yaml:"baseURL"`   // public-facing base URL for link generation, e.g. "http://localhost:8080"
 	LogFormat string          `yaml:"logFormat"` // "text" (default) or "json"
 	LogLevel  string          `yaml:"logLevel"`  // "debug", "info" (default), "warn", "error"
 	RateLimit RateLimitConfig `yaml:"rateLimit"`
@@ -123,7 +125,7 @@ type RateLimitConfig struct {
 }
 
 type DeploymentConfig struct {
-	PreferredTarget string `yaml:"preferredTarget"` // "auto", "knative", "kubernetes", "wasmcloud"
+	PreferredTarget string `yaml:"preferredTarget"` // "auto", "knative", "kubernetes"
 	Namespace       string `yaml:"namespace"`
 }
 
@@ -212,19 +214,6 @@ type GCConfig struct {
 	DryRun   bool   `yaml:"dryRun"`   // Log without deleting (default: false)
 }
 
-// WasmCloudConfig holds wasmCloud-specific configuration.
-type WasmCloudConfig struct {
-	LatticeID string            `yaml:"latticeId"` // wasmCloud lattice ID (default: "default")
-	Builder   WasmBuilderConfig `yaml:"builder"`
-}
-
-// WasmBuilderConfig configures the wasm component builder.
-type WasmBuilderConfig struct {
-	Image    string `yaml:"image"`    // Builder image with wash + toolchains (default: "ghcr.io/vibed/wasm-builder:latest")
-	Timeout  string `yaml:"timeout"`  // Build timeout (default: "10m")
-	Insecure bool   `yaml:"insecure"` // Allow insecure OCI registry push
-}
-
 // Default returns a Config with sensible defaults.
 func Default() *Config {
 	return &Config{
@@ -282,13 +271,6 @@ func Default() *Config {
 			DomainSuffix: "127.0.0.1.sslip.io",
 			IngressClass: "kourier.ingress.networking.knative.dev",
 		},
-		WasmCloud: WasmCloudConfig{
-			LatticeID: "default",
-			Builder: WasmBuilderConfig{
-				Image:   "ghcr.io/vibed/wasm-builder:latest",
-				Timeout: "10m",
-			},
-		},
 		Limits: LimitsConfig{
 			MaxTotalFileSize: 50 * 1024 * 1024, // 50 MB
 			MaxFileCount:     500,
@@ -343,6 +325,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("VIBED_SERVER_HTTP_ADDR"); v != "" {
 		cfg.Server.HTTPAddr = v
+	}
+	if v := os.Getenv("VIBED_SERVER_BASE_URL"); v != "" {
+		cfg.Server.BaseURL = v
 	}
 	if v := os.Getenv("VIBED_LOG_FORMAT"); v != "" {
 		cfg.Server.LogFormat = v
@@ -406,16 +391,6 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Knative.GatewayPort = n
 		}
 	}
-	if v := os.Getenv("VIBED_WASMCLOUD_LATTICE_ID"); v != "" {
-		cfg.WasmCloud.LatticeID = v
-	}
-	if v := os.Getenv("VIBED_WASMCLOUD_BUILDER_IMAGE"); v != "" {
-		cfg.WasmCloud.Builder.Image = v
-	}
-	if v := os.Getenv("VIBED_WASMCLOUD_BUILDER_INSECURE"); v != "" {
-		cfg.WasmCloud.Builder.Insecure, _ = strconv.ParseBool(v)
-	}
-
 	// Auth overrides
 	if v := os.Getenv("VIBED_AUTH_ENABLED"); v != "" {
 		cfg.Auth.Enabled, _ = strconv.ParseBool(v)
@@ -539,9 +514,9 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("server.logLevel must be one of: debug, info, warn, error (got %q)", cfg.Server.LogLevel)
 	}
 
-	validTargets := map[string]bool{"auto": true, "knative": true, "kubernetes": true, "wasmcloud": true}
+	validTargets := map[string]bool{"auto": true, "knative": true, "kubernetes": true}
 	if !validTargets[cfg.Deployment.PreferredTarget] {
-		return fmt.Errorf("deployment.preferredTarget must be one of: auto, knative, kubernetes, wasmcloud (got %q)", cfg.Deployment.PreferredTarget)
+		return fmt.Errorf("deployment.preferredTarget must be one of: auto, knative, kubernetes (got %q)", cfg.Deployment.PreferredTarget)
 	}
 
 	validStorageBackends := map[string]bool{"local": true, "github": true, "gitlab": true}

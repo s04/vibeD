@@ -31,6 +31,10 @@ type BuildResult struct {
 // Builder builds container images from source code.
 type Builder interface {
 	Build(ctx context.Context, req BuildRequest) (*BuildResult, error)
+	// PublishesInternally returns true when the builder handles registry push
+	// as part of Build (e.g. Buildah Job). When true the orchestrator skips
+	// the separate crane-based registry.Push step.
+	PublishesInternally() bool
 }
 
 // PackBuilder uses Cloud Native Buildpacks (via the pack library) to build images.
@@ -93,6 +97,10 @@ func (b *PackBuilder) Build(ctx context.Context, req BuildRequest) (*BuildResult
 		ImageRef: req.ImageName,
 	}, nil
 }
+
+// PublishesInternally returns false: PackBuilder builds into the local daemon; the
+// orchestrator handles the separate registry.Push step via crane when needed.
+func (b *PackBuilder) PublishesInternally() bool { return false }
 
 // validImageName matches standard OCI image references: registry/repo:tag or registry/repo
 // Rejects characters that could be used for shell injection (spaces, semicolons, backticks, etc.)

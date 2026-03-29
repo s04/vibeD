@@ -46,11 +46,15 @@ type listShareLinksInput struct {
 	ArtifactID string `json:"artifact_id" jsonschema:"ID of the artifact to list share links for"`
 }
 
+type listShareLinksOutput struct {
+	Links []api.ShareLink `json:"links"`
+}
+
 func registerListShareLinksTool(server *mcp.Server, orch *orchestrator.Orchestrator) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_share_links",
 		Description: "List all share links for an artifact. Only the artifact owner or admin can see these.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input listShareLinksInput) (*mcp.CallToolResult, *[]api.ShareLink, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input listShareLinksInput) (*mcp.CallToolResult, *listShareLinksOutput, error) {
 		links, err := orch.ListShareLinks(ctx, input.ArtifactID)
 		if err != nil {
 			return nil, nil, err
@@ -58,7 +62,7 @@ func registerListShareLinksTool(server *mcp.Server, orch *orchestrator.Orchestra
 		if links == nil {
 			links = []api.ShareLink{}
 		}
-		return nil, &links, nil
+		return nil, &listShareLinksOutput{Links: links}, nil
 	})
 }
 

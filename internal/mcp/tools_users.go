@@ -9,9 +9,13 @@ import (
 	"github.com/vibed-project/vibeD/pkg/api"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"time"
 )
 
-type listUsersInput struct{}
+type listUsersInput struct {
+	DepartmentID string `json:"department_id,omitempty" jsonschema:"Filter users by department ID. Omit to list all users."`
+}
 
 type listUsersOutput struct {
 	Users []api.User `json:"users"`
@@ -20,12 +24,12 @@ type listUsersOutput struct {
 func registerListUsersTool(server *mcp.Server, userStore store.UserStore) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_users",
-		Description: "List all vibeD users. Requires admin role.",
+		Description: "List all vibeD users. Requires admin role. Optionally filter by department.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input listUsersInput) (*mcp.CallToolResult, *listUsersOutput, error) {
 		if !vibedauth.IsAdmin(ctx) {
 			return nil, nil, fmt.Errorf("admin access required")
 		}
-		users, err := userStore.ListUsers(ctx)
+		users, err := userStore.ListUsers(ctx, input.DepartmentID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -51,5 +55,58 @@ func registerGetUserTool(server *mcp.Server, userStore store.UserStore) {
 			return nil, nil, err
 		}
 		return nil, user, nil
+	})
+}
+
+// --- Department tools ---
+
+type listDepartmentsInput struct{}
+
+type listDepartmentsOutput struct {
+	Departments []api.Department `json:"departments"`
+}
+
+func registerListDepartmentsTool(server *mcp.Server, userStore store.UserStore) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "list_departments",
+		Description: "List all departments in vibeD.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input listDepartmentsInput) (*mcp.CallToolResult, *listDepartmentsOutput, error) {
+		depts, err := userStore.ListDepartments(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		if depts == nil {
+			depts = []api.Department{}
+		}
+		return nil, &listDepartmentsOutput{Departments: depts}, nil
+	})
+}
+
+type createDepartmentInput struct {
+	Name string `json:"name" jsonschema:"Name of the department to create"`
+}
+
+func registerCreateDepartmentTool(server *mcp.Server, userStore store.UserStore) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "create_department",
+		Description: "Create a new department. Requires admin role.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input createDepartmentInput) (*mcp.CallToolResult, *api.Department, error) {
+		if !vibedauth.IsAdmin(ctx) {
+			return nil, nil, fmt.Errorf("admin access required")
+		}
+		if input.Name == "" {
+			return nil, nil, fmt.Errorf("name is required")
+		}
+		now := time.Now()
+		dept := &api.Department{
+			ID:        fmt.Sprintf("dept-%x", now.UnixNano()),
+			Name:      input.Name,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		if err := userStore.CreateDepartment(ctx, dept); err != nil {
+			return nil, nil, err
+		}
+		return nil, dept, nil
 	})
 }

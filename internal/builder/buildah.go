@@ -267,3 +267,6 @@ func (b *BuildahBuilder) cleanup(_ context.Context, jobName string) {
 		b.logger.Warn("failed to cleanup build Job", "job", jobName, "error", err)
 	}
 }
+
+// PublishesInternally returns true: BuildahBuilder pushes to the registry inside the K8s Job.
+func (b *BuildahBuilder) PublishesInternally() bool { return true }

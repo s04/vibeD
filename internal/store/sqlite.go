@@ -78,6 +78,13 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_status ON artifacts(status);
 CREATE INDEX IF NOT EXISTS idx_artifacts_owner_id ON artifacts(owner_id);
 CREATE INDEX IF NOT EXISTS idx_artifact_versions_artifact_id ON artifact_versions(artifact_id);
 CREATE INDEX IF NOT EXISTS idx_share_links_artifact_id ON share_links(artifact_id);
+
+CREATE TABLE IF NOT EXISTS departments (
+	id         TEXT PRIMARY KEY,
+	name       TEXT UNIQUE NOT NULL,
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL
+);
 `
 
 // SQLiteStore is a persistent ArtifactStore backed by SQLite.
@@ -114,6 +121,22 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("creating schema: %w", err)
+	}
+
+	// Migration: add department_id to users if missing
+	if !columnExists(db, "users", "department_id") {
+		if _, err := db.Exec(`ALTER TABLE users ADD COLUMN department_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("migrating users table: %w", err)
+		}
+	}
+
+	// Migration: add api_key_hash to users if missing
+	if !columnExists(db, "users", "api_key_hash") {
+		if _, err := db.Exec(`ALTER TABLE users ADD COLUMN api_key_hash TEXT NOT NULL DEFAULT ''`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("migrating users table (api_key_hash): %w", err)
+		}
 	}
 
 	return &SQLiteStore{db: db}, nil
@@ -483,9 +506,10 @@ func isUniqueViolation(err error) bool {
 
 func (s *SQLiteStore) CreateUser(ctx context.Context, user *api.User) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO users (id, name, email, role, status, provider, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		user.ID, user.Name, user.Email, user.Role, user.Status, user.Provider,
+		`INSERT INTO users (id, name, email, role, status, provider, department_id, api_key_hash, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		user.ID, user.Name, user.Email, user.Role, user.Status, user.Provider, user.DepartmentID,
+		user.APIKeyHash,
 		user.CreatedAt.Format(time.RFC3339Nano), user.UpdatedAt.Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -501,8 +525,8 @@ func (s *SQLiteStore) GetUser(ctx context.Context, id string) (*api.User, error)
 	var u api.User
 	var createdAt, updatedAt string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, email, role, status, provider, created_at, updated_at FROM users WHERE id = ?`, id,
-	).Scan(&u.ID, &u.Name, &u.Email, &u.Role, &u.Status, &u.Provider, &createdAt, &updatedAt)
+		`SELECT id, name, email, role, status, provider, department_id, created_at, updated_at FROM users WHERE id = ?`, id,
+	).Scan(&u.ID, &u.Name, &u.Email, &u.Role, &u.Status, &u.Provider, &u.DepartmentID, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("user %q not found", id)
 	}
@@ -518,8 +542,8 @@ func (s *SQLiteStore) GetUserByName(ctx context.Context, name string) (*api.User
 	var u api.User
 	var createdAt, updatedAt string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, email, role, status, provider, created_at, updated_at FROM users WHERE name = ?`, name,
-	).Scan(&u.ID, &u.Name, &u.Email, &u.Role, &u.Status, &u.Provider, &createdAt, &updatedAt)
+		`SELECT id, name, email, role, status, provider, department_id, created_at, updated_at FROM users WHERE name = ?`, name,
+	).Scan(&u.ID, &u.Name, &u.Email, &u.Role, &u.Status, &u.Provider, &u.DepartmentID, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("user %q not found", name)
 	}
@@ -531,9 +555,16 @@ func (s *SQLiteStore) GetUserByName(ctx context.Context, name string) (*api.User
 	return &u, nil
 }
 
-func (s *SQLiteStore) ListUsers(ctx context.Context) ([]api.User, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, email, role, status, provider, created_at, updated_at FROM users ORDER BY name`)
+func (s *SQLiteStore) ListUsers(ctx context.Context, departmentID string) ([]api.User, error) {
+	query := `SELECT id, name, email, role, status, provider, department_id, created_at, updated_at FROM users`
+	var args []interface{}
+	if departmentID != "" {
+		query += ` WHERE department_id = ?`
+		args = append(args, departmentID)
+	}
+	query += ` ORDER BY name`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing users: %w", err)
 	}
@@ -543,7 +574,7 @@ func (s *SQLiteStore) ListUsers(ctx context.Context) ([]api.User, error) {
 	for rows.Next() {
 		var u api.User
 		var createdAt, updatedAt string
-		if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.Role, &u.Status, &u.Provider, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.Role, &u.Status, &u.Provider, &u.DepartmentID, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scanning user: %w", err)
 		}
 		u.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
@@ -553,10 +584,26 @@ func (s *SQLiteStore) ListUsers(ctx context.Context) ([]api.User, error) {
 	return users, rows.Err()
 }
 
+func (s *SQLiteStore) GetUserByAPIKeyHash(ctx context.Context, hash string) (*api.User, error) {
+	var u api.User
+	var createdAt, updatedAt string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, name, email, role, status, provider, department_id, api_key_hash, created_at, updated_at
+		 FROM users WHERE api_key_hash = ? AND api_key_hash != ''`,
+		hash,
+	).Scan(&u.ID, &u.Name, &u.Email, &u.Role, &u.Status, &u.Provider, &u.DepartmentID, &u.APIKeyHash, &createdAt, &updatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("user not found by API key hash: %w", err)
+	}
+	u.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	u.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	return &u, nil
+}
+
 func (s *SQLiteStore) UpdateUser(ctx context.Context, user *api.User) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE users SET name=?, email=?, role=?, status=?, updated_at=? WHERE id=?`,
-		user.Name, user.Email, user.Role, user.Status,
+		`UPDATE users SET name=?, email=?, role=?, status=?, department_id=?, updated_at=? WHERE id=?`,
+		user.Name, user.Email, user.Role, user.Status, user.DepartmentID,
 		user.UpdatedAt.Format(time.RFC3339Nano), user.ID,
 	)
 	if err != nil {
@@ -650,4 +697,134 @@ func (s *SQLiteStore) RevokeShareLink(ctx context.Context, token string) error {
 		return &api.ErrShareLinkNotFound{Token: token}
 	}
 	return nil
+}
+
+// --- Department CRUD ---
+
+func (s *SQLiteStore) CreateDepartment(ctx context.Context, dept *api.Department) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO departments (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+		dept.ID, dept.Name,
+		dept.CreatedAt.Format(time.RFC3339Nano), dept.UpdatedAt.Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("department %q already exists", dept.Name)
+		}
+		return fmt.Errorf("inserting department: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) GetDepartment(ctx context.Context, id string) (*api.Department, error) {
+	var d api.Department
+	var createdAt, updatedAt string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, name, created_at, updated_at FROM departments WHERE id = ?`, id,
+	).Scan(&d.ID, &d.Name, &createdAt, &updatedAt)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("department %q not found", id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying department: %w", err)
+	}
+	d.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	d.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	return &d, nil
+}
+
+func (s *SQLiteStore) GetDepartmentByName(ctx context.Context, name string) (*api.Department, error) {
+	var d api.Department
+	var createdAt, updatedAt string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, name, created_at, updated_at FROM departments WHERE name = ?`, name,
+	).Scan(&d.ID, &d.Name, &createdAt, &updatedAt)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("department %q not found", name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying department by name: %w", err)
+	}
+	d.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	d.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	return &d, nil
+}
+
+func (s *SQLiteStore) ListDepartments(ctx context.Context) ([]api.Department, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, name, created_at, updated_at FROM departments ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("listing departments: %w", err)
+	}
+	defer rows.Close()
+
+	var depts []api.Department
+	for rows.Next() {
+		var d api.Department
+		var createdAt, updatedAt string
+		if err := rows.Scan(&d.ID, &d.Name, &createdAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scanning department: %w", err)
+		}
+		d.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+		d.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+		depts = append(depts, d)
+	}
+	return depts, rows.Err()
+}
+
+func (s *SQLiteStore) UpdateDepartment(ctx context.Context, dept *api.Department) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE departments SET name=?, updated_at=? WHERE id=?`,
+		dept.Name, dept.UpdatedAt.Format(time.RFC3339Nano), dept.ID,
+	)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("department %q already exists", dept.Name)
+		}
+		return fmt.Errorf("updating department: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("department %q not found", dept.ID)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) DeleteDepartment(ctx context.Context, id string) error {
+	// Clear department_id on all users in this department
+	if _, err := s.db.ExecContext(ctx, `UPDATE users SET department_id='' WHERE department_id=?`, id); err != nil {
+		return fmt.Errorf("clearing department from users: %w", err)
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM departments WHERE id=?`, id)
+	if err != nil {
+		return fmt.Errorf("deleting department: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("department %q not found", id)
+	}
+	return nil
+}
+
+// columnExists checks if a column exists in a SQLite table.
+func columnExists(db *sql.DB, table, column string) bool {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return false
+		}
+		if name == column {
+			return true
+		}
+	}
+	return false
 }

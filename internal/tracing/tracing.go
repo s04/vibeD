@@ -48,18 +48,12 @@ func Init(cfg config.TracingConfig, logger *slog.Logger) (func(context.Context) 
 		logger.Info("tracing enabled (stdout)", "sampleRate", cfg.SampleRate)
 	}
 
-	// Build resource
-	res, err := resource.Merge(
-		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceName("vibed"),
-			semconv.ServiceVersion("0.1.0"),
-		),
+	// Build resource (avoid Merge with Default to prevent schema URL conflicts)
+	res := resource.NewWithAttributes(
+		semconv.SchemaURL,
+		semconv.ServiceName("vibed"),
+		semconv.ServiceVersion("0.1.0"),
 	)
-	if err != nil {
-		return nil, fmt.Errorf("creating resource: %w", err)
-	}
 
 	// Build sampler
 	sampler := sdktrace.AlwaysSample()

@@ -225,25 +225,6 @@ func main() {
 	k8sDeployer := deployer.NewKubernetesDeployer(k8sClients.Clientset, cfg.Deployment, logger)
 	factory.Register(api.TargetKubernetes, k8sDeployer)
 
-	// Register wasmCloud deployer
-	wasmDeployer := deployer.NewWasmCloudDeployer(k8sClients.DynamicClient, k8sClients.Clientset, cfg.Deployment, cfg.WasmCloud, logger)
-	factory.Register(api.TargetWasmCloud, wasmDeployer)
-
-	// Create wasm builder for wasmCloud target (shares PVC with Buildah builder)
-	wasmPVCName := cfg.Builder.Buildah.PVCName
-	if wasmPVCName == "" {
-		wasmPVCName = "vibed-data"
-	}
-	wasmNs := cfg.Builder.Buildah.Namespace
-	if wasmNs == "" {
-		wasmNs = cfg.Deployment.Namespace
-	}
-	wasmPVCMountPath := filepath.Dir(cfg.Storage.Local.BasePath)
-	wasmBldr := builder.NewWasmBuilder(
-		k8sClients.Clientset, cfg.WasmCloud.Builder, cfg.Registry,
-		wasmNs, wasmPVCName, wasmPVCMountPath, logger,
-	)
-
 	// Create orchestrator
 	// Create event bus for SSE streaming
 	bus := events.NewEventBus()
@@ -254,7 +235,7 @@ func main() {
 		shareLinkStore = sls
 	}
 
-	orch := orchestrator.NewOrchestrator(cfg, detector, bldr, wasmBldr, factory, stg, st, m, k8sClients.Clientset, bus, shareLinkStore, logger)
+	orch := orchestrator.NewOrchestrator(cfg, detector, bldr, factory, stg, st, m, k8sClients.Clientset, bus, shareLinkStore, logger)
 
 	// Start garbage collector
 	if cfg.GC.Enabled {
@@ -361,6 +342,10 @@ func runHTTPServer(ctx context.Context, cfg *config.Config, mcpServer *mcp.Serve
 		roleMap := vibedauth.BuildRoleMap(cfg.Auth.APIKeys)
 		handler = vibedauth.RoleMiddleware(roleMap, userStore)(handler) // inner: inject role into context
 		handler = vibedauth.SkipAuthPaths(authMiddleware)(handler)      // outer: authenticate first
+	} else {
+		// Auth disabled — inject admin role so all API endpoints are accessible.
+		// This makes the dashboard fully functional in no-auth (dev) mode.
+		handler = vibedauth.NoAuthAdminMiddleware()(handler)
 	}
 
 	// Apply rate limiting (after auth so we can key by user)

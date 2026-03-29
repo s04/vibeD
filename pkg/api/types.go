@@ -12,7 +12,6 @@ const (
 	TargetAuto       DeploymentTarget = "auto"
 	TargetKnative    DeploymentTarget = "knative"
 	TargetKubernetes DeploymentTarget = "kubernetes"
-	TargetWasmCloud  DeploymentTarget = "wasmcloud"
 )
 
 // ArtifactStatus represents the lifecycle state of a deployed artifact.
@@ -81,12 +80,29 @@ type ArtifactVersion struct {
 
 // User represents a vibeD user identity.
 type User struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Email        string    `json:"email,omitempty"`
+	Role         string    `json:"role"`
+	Status       string    `json:"status"`
+	Provider     string    `json:"provider"`                // "local" (API key) or "oidc"
+	DepartmentID string    `json:"department_id,omitempty"` // FK to departments table
+	APIKeyHash   string    `json:"-"`                       // SHA256 hash of runtime API key; never in JSON
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// UserWithKey is returned only when creating a user with an API key.
+// The APIKey field is the plaintext key shown once at creation time.
+type UserWithKey struct {
+	User
+	APIKey string `json:"api_key,omitempty"`
+}
+
+// Department represents an organizational unit for grouping users.
+type Department struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
-	Email     string    `json:"email,omitempty"`
-	Role      string    `json:"role"`
-	Status    string    `json:"status"`
-	Provider  string    `json:"provider"` // "local" (API key) or "oidc"
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

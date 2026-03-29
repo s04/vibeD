@@ -47,7 +47,7 @@ These require a Kind cluster (`make dev` or `make test-integration-setup`). Tagg
 | **HTTP API** | `internal/frontend/handler_integration_test.go` | 3 | List artifacts, list targets, 404 for missing artifact |
 | **Authentication** | `internal/auth/auth_integration_test.go` | 8 | Valid/invalid keys, missing token, skip paths, env var keys |
 | **Health Checks** | `internal/health/health_integration_test.go` | 7 | Liveness, readiness, component details, not-ready state |
-| **Environment Detection** | `internal/environment/detector_integration_test.go` | 6 | K8s/Knative/wasmCloud detection, target selection, unavailable targets |
+| **Environment Detection** | `internal/environment/detector_integration_test.go` | 5 | K8s/Knative detection, target selection |
 | **ConfigMap Store** | `internal/store/configmap_integration_test.go` | 9 | CRUD, list, filter, duplicates (K8s-backed store) |
 | **Image Builder** | `internal/builder/builder_integration_test.go` | 1 | Static site buildpack (slow, skipped with `-short`) |
 | **HTTP Metrics** | `internal/metrics/middleware_integration_test.go` | 2 | Request recording, path normalization |

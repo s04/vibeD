@@ -11,7 +11,9 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -32,9 +34,7 @@ import (
 // The userStore parameter is optional (may be nil when auth is disabled or mode is not OIDC).
 func Middleware(cfg config.AuthConfig, userStore store.UserStore, logger *slog.Logger) (func(http.Handler) http.Handler, error) {
 	if !cfg.Enabled {
-		return func(next http.Handler) http.Handler {
-			return next
-		}, nil
+		return func(next http.Handler) http.Handler { return next }, nil
 	}
 
 	var verifier mcpauth.TokenVerifier
@@ -44,7 +44,7 @@ func Middleware(cfg config.AuthConfig, userStore store.UserStore, logger *slog.L
 		if len(cfg.APIKeys) == 0 {
 			return nil, fmt.Errorf("auth.mode is 'apikey' but no API keys are configured")
 		}
-		verifier = apiKeyVerifier(cfg.APIKeys, logger)
+		verifier = apiKeyVerifier(cfg.APIKeys, userStore, logger)
 
 	case "oauth":
 		verifier = oauthPassthroughVerifier(logger)
@@ -61,10 +61,41 @@ func Middleware(cfg config.AuthConfig, userStore store.UserStore, logger *slog.L
 	}
 
 	opts := &mcpauth.RequireBearerTokenOptions{}
-	middleware := mcpauth.RequireBearerToken(verifier, opts)
+	tokenMiddleware := mcpauth.RequireBearerToken(verifier, opts)
 	logger.Info("authentication enabled", "mode", cfg.Mode)
 
+	// Wrap with suspended user check
+	middleware := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Let token auth run first (sets user identity in context)
+			// We intercept by wrapping next with a status checker
+			statusChecker := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				userID := UserIDFromContext(r.Context())
+				if userStore != nil && userID != "" {
+					user, err := userStore.GetUser(r.Context(), userID)
+					if err == nil && user.Status == "suspended" {
+						http.Error(w, "account suspended", http.StatusUnauthorized)
+						return
+					}
+				}
+				next.ServeHTTP(w, r)
+			})
+			tokenMiddleware(statusChecker).ServeHTTP(w, r)
+		})
+	}
+
 	return middleware, nil
+}
+
+// NoAuthAdminMiddleware returns a middleware that injects the admin role into every
+// request context. Used when authentication is disabled so the dashboard and all
+// admin API endpoints remain fully accessible in dev/no-auth mode.
+func NoAuthAdminMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(WithRole(r.Context(), "admin")))
+		})
+	}
 }
 
 // SkipAuthPaths wraps an auth middleware to skip authentication for certain paths
@@ -94,7 +125,8 @@ func SkipAuthPaths(authMiddleware func(http.Handler) http.Handler) func(http.Han
 }
 
 // apiKeyVerifier returns a TokenVerifier that validates tokens against configured API keys.
-func apiKeyVerifier(keys []config.APIKeyConf, logger *slog.Logger) mcpauth.TokenVerifier {
+// If userStore is non-nil, it auto-provisions users on first authentication.
+func apiKeyVerifier(keys []config.APIKeyConf, userStore store.UserStore, logger *slog.Logger) mcpauth.TokenVerifier {
 	return func(ctx context.Context, token string, req *http.Request) (*mcpauth.TokenInfo, error) {
 		for _, key := range keys {
 			resolvedKey := resolveKeyValue(key.Key)
@@ -103,10 +135,30 @@ func apiKeyVerifier(keys []config.APIKeyConf, logger *slog.Logger) mcpauth.Token
 					"name", key.Name,
 					"path", req.URL.Path,
 				)
+
+				// Auto-provision user on first authentication
+				if userStore != nil && key.Name != "" {
+					autoProvisionAPIKeyUser(ctx, userStore, key, logger)
+				}
+
 				return &mcpauth.TokenInfo{
 					Scopes:     key.Scopes,
-					Expiration: time.Now().Add(24 * time.Hour), // API keys don't expire per-request
+					Expiration: time.Now().Add(24 * time.Hour),
 					UserID:     key.Name,
+				}, nil
+			}
+		}
+
+		// No static key matched — check runtime-generated keys in the store
+		if userStore != nil {
+			hash := sha256.Sum256([]byte(token))
+			hashHex := hex.EncodeToString(hash[:])
+			if user, err := userStore.GetUserByAPIKeyHash(ctx, hashHex); err == nil {
+				logger.Debug("runtime API key authenticated", "user", user.ID, "path", req.URL.Path)
+				return &mcpauth.TokenInfo{
+					Scopes:     nil,
+					Expiration: time.Now().Add(24 * time.Hour),
+					UserID:     user.ID,
 				}, nil
 			}
 		}
@@ -117,6 +169,59 @@ func apiKeyVerifier(keys []config.APIKeyConf, logger *slog.Logger) mcpauth.Token
 		)
 		return nil, mcpauth.ErrInvalidToken
 	}
+}
+
+// autoProvisionAPIKeyUser creates a user record on first API key authentication.
+func autoProvisionAPIKeyUser(ctx context.Context, userStore store.UserStore, key config.APIKeyConf, logger *slog.Logger) {
+	userID := "apikey-" + key.Name
+	if _, err := userStore.GetUser(ctx, userID); err == nil {
+		return // user already exists
+	}
+
+	role := key.Role
+	if role == "" {
+		role = "user"
+	}
+
+	// Resolve department if configured
+	var deptID string
+	if key.Department != "" {
+		dept, err := userStore.GetDepartmentByName(ctx, key.Department)
+		if err != nil {
+			// Auto-create the department
+			now := time.Now()
+			dept = &api.Department{
+				ID:        fmt.Sprintf("dept-%x", now.UnixNano()),
+				Name:      key.Department,
+				CreatedAt: now,
+				UpdatedAt: now,
+			}
+			if createErr := userStore.CreateDepartment(ctx, dept); createErr != nil {
+				// May already exist from concurrent request; try to fetch again
+				dept, _ = userStore.GetDepartmentByName(ctx, key.Department)
+			}
+		}
+		if dept != nil {
+			deptID = dept.ID
+		}
+	}
+
+	now := time.Now()
+	user := &api.User{
+		ID:           userID,
+		Name:         key.Name,
+		Role:         role,
+		Status:       "active",
+		Provider:     "local",
+		DepartmentID: deptID,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := userStore.CreateUser(ctx, user); err != nil {
+		logger.Debug("auto-provision user skipped (may already exist)", "name", key.Name, "error", err)
+		return
+	}
+	logger.Info("auto-provisioned API key user", "name", key.Name, "role", role, "department", key.Department)
 }
 
 // oauthPassthroughVerifier accepts any Bearer token and passes it through.
@@ -268,23 +373,45 @@ func newOIDCVerifier(cfg config.OIDCConfig, userStore store.UserStore, logger *s
 		// Auto-provision user if store is available
 		if userStore != nil {
 			if _, err := userStore.GetUser(ctx, sub); err != nil {
+				// Resolve department from claim
+				var deptID string
+				if cfg.DepartmentClaim != "" {
+					deptName := extractStringClaim(claims, cfg.DepartmentClaim)
+					if deptName != "" {
+						dept, dErr := userStore.GetDepartmentByName(ctx, deptName)
+						if dErr != nil {
+							now := time.Now()
+							dept = &api.Department{
+								ID: fmt.Sprintf("dept-%x", now.UnixNano()), Name: deptName,
+								CreatedAt: now, UpdatedAt: now,
+							}
+							if cErr := userStore.CreateDepartment(ctx, dept); cErr != nil {
+								dept, _ = userStore.GetDepartmentByName(ctx, deptName)
+							}
+						}
+						if dept != nil {
+							deptID = dept.ID
+						}
+					}
+				}
+
 				// User doesn't exist — create
 				now := time.Now()
 				newUser := &api.User{
-					ID:        sub,
-					Name:      username,
-					Email:     email,
-					Role:      role,
-					Status:    "active",
-					Provider:  "oidc",
-					CreatedAt: now,
-					UpdatedAt: now,
+					ID:           sub,
+					Name:         username,
+					Email:        email,
+					Role:         role,
+					Status:       "active",
+					Provider:     "oidc",
+					DepartmentID: deptID,
+					CreatedAt:    now,
+					UpdatedAt:    now,
 				}
 				if createErr := userStore.CreateUser(ctx, newUser); createErr != nil {
-					// May fail on duplicate name — try updating instead
 					logger.Debug("auto-provision user failed (may already exist)", "sub", sub, "error", createErr)
 				} else {
-					logger.Info("auto-provisioned OIDC user", "sub", sub, "name", username, "role", role)
+					logger.Info("auto-provisioned OIDC user", "sub", sub, "name", username, "role", role, "department", deptID)
 				}
 			}
 		}

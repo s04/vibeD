@@ -64,6 +64,7 @@ config:
   server:
     transport: "http"
     httpAddr: ":8080"
+    baseURL: ""  # public-facing URL for share link generation, e.g. "http://localhost:31808"
     rateLimit:
       enabled: false
       requestsPerSecond: 10
@@ -89,7 +90,9 @@ config:
     url: "kind-registry:5000"
     insecure: true  # kind-registry is HTTP-only
   store:
-    backend: "configmap"
+    backend: "configmap"  # "sqlite" for share links, "configmap" for configmap-only
+    sqlite:
+      path: "/data/vibed/vibed.db"  # path inside the container (should be on a PVC)
     configmap:
       name: "vibed-artifacts"
       namespace: ""  # Defaults to release namespace
