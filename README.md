@@ -4,6 +4,8 @@
 
 **Workload orchestrator for GenAI-generated artifacts.**
 
+Fork-specific changes and project direction are tracked in [FORK_NOTES.md](./FORK_NOTES.md).
+
 vibeD bridges AI coding tools (Claude, Gemini, ChatGPT) with your own Kubernetes infrastructure. It exposes an [MCP server](https://modelcontextprotocol.io/) that AI tools call to deploy websites and web apps directly to your cluster — keeping code on your infrastructure, not in third-party sandboxes.
 
 ![](./media/gif/hello-world.gif)
