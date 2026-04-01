@@ -25,13 +25,10 @@ Format:
 
 ## Current Entries
 
-## Next PR
-
-- Next PR: Make the artifact API the canonical definition for the overlapping deploy/list/status/share lifecycle operations, then derive the MCP tool surface from those same API operation definitions. This keeps the original tool wording but removes the separate API-vs-MCP implementation paths for the artifact surface.
-
 ## 2026-04-01
 
 - PR #1: Added an initial PR-loop workflow script and introduced first-pass REST deploy/update endpoints for artifacts (`POST /api/artifacts`, `PUT /api/artifacts/{id}`), along with matching OpenAPI updates and handler tests. This was the fork's first step toward making deployment usable without relying only on MCP.
 - PR #2: Tightened the PR-loop workflow so staged files define the PR boundary. This keeps future pull requests small and reviewable instead of committing every local change at once.
 - PR #3: Added this `FORK_NOTES.md` file, a README pointer to it, and a pull request template reminding contributors to record fork-specific changes when they materially affect behavior or direction.
 - PR #4: Added a shared `internal/operations` foundation package that defines the overlapping artifact lifecycle operations in one canonical registry. This is groundwork for reducing duplication between REST and MCP without changing deployment behavior yet.
+- PR #7: Made the artifact API operations the canonical definition for the overlapping artifact lifecycle surface, then derived the artifact MCP tool registrations from those same API operations. This removes the separate API-vs-MCP implementation paths for artifact deploy/list/status/share behavior while preserving the existing MCP tool names and descriptions.
