@@ -25,6 +25,10 @@ Format:
 
 ## Current Entries
 
+## Next PR
+
+- Next PR: Simplify the artifact MCP adapter by replacing the remaining repetitive output-shaping glue with one generic registration path plus a small set of explicit projection helpers. This keeps the API-first structure from PR #7, but makes the MCP side easier to read and cheaper to extend.
+
 ## 2026-04-01
 
 - PR #1: Added an initial PR-loop workflow script and introduced first-pass REST deploy/update endpoints for artifacts (`POST /api/artifacts`, `PUT /api/artifacts/{id}`), along with matching OpenAPI updates and handler tests. This was the fork's first step toward making deployment usable without relying only on MCP.
