@@ -4,13 +4,14 @@ sidebar_position: 1
 
 # MCP Tools Overview
 
-vibeD exposes 14 MCP tools that AI coding tools can call to deploy and manage artifacts.
+vibeD exposes 15 MCP tools that AI coding tools can call to deploy and manage artifacts.
 
 ## Available Tools
 
 | Tool | Description |
 |------|-------------|
 | [`deploy_artifact`](./deploy-artifact) | Deploy source files as a web artifact |
+| [`deploy_from_repo`](./deploy-from-repo) | Deploy directly from a Git repository |
 | [`list_artifacts`](./list-artifacts) | List deployed artifacts (paginated) |
 | [`get_artifact_status`](./get-artifact-status) | Get detailed status for one artifact |
 | [`update_artifact`](./update-artifact) | Update an existing artifact with new files |

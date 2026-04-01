@@ -56,6 +56,7 @@ func NewHandler(orch *orchestrator.Orchestrator, cfg *config.Config, bus *events
 
 	// API routes
 	mux.HandleFunc("/api/artifacts", handleArtifacts(orch, cfg.Limits))
+	mux.HandleFunc("/api/artifacts/from-repo", handleArtifactDeployFromRepo(orch, cfg.Limits))
 	mux.HandleFunc("/api/artifacts/", handleArtifacts(orch, cfg.Limits))
 	mux.HandleFunc("/api/targets", handleTargets(orch))
 	mux.HandleFunc("/api/whoami", handleWhoami(userStore))
@@ -169,6 +170,30 @@ func handleArtifactDeploy(orch *orchestrator.Orchestrator, limits config.LimitsC
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(result)
+}
+
+func handleArtifactDeployFromRepo(orch *orchestrator.Orchestrator, limits config.LimitsConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var body operations.DeployArtifactFromRepoRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		result, err := operations.DeployArtifactFromRepo(r.Context(), orch, limits, body)
+		if err != nil {
+			writeError(w, err, http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(result)
+	}
 }
 
 func handleArtifactUpdate(orch *orchestrator.Orchestrator, limits config.LimitsConfig, artifactID string, w http.ResponseWriter, r *http.Request) {

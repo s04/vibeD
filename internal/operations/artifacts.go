@@ -36,6 +36,20 @@ type DeployArtifactRequest struct {
 	Port       int               `json:"port,omitempty"`
 }
 
+type DeployArtifactFromRepoRequest struct {
+	RepoURL    string            `json:"repo_url"`
+	Path       string            `json:"path,omitempty"`
+	Branch     string            `json:"branch,omitempty"`
+	Commit     string            `json:"commit,omitempty"`
+	AuthToken  string            `json:"auth_token,omitempty"`
+	Name       string            `json:"name"`
+	Language   string            `json:"language,omitempty"`
+	Target     string            `json:"target,omitempty"`
+	EnvVars    map[string]string `json:"env_vars,omitempty"`
+	SecretRefs map[string]string `json:"secret_refs,omitempty"`
+	Port       int               `json:"port,omitempty"`
+}
+
 type UpdateArtifactRequest struct {
 	ArtifactID string            `json:"artifact_id"`
 	Files      map[string]string `json:"files"`
@@ -143,6 +157,14 @@ var artifactOperations = []Operation{
 		Summary:     "Deploy a web artifact (website, web app) to the cluster.",
 		Description: "Deploy a web artifact (website, web app) to the cluster. Provide source files and vibeD handles building a container image and deploying it. Returns immediately with status \"building\" and an artifact_id — use get_artifact_status to poll until status is \"running\". Knative is used when available (auto-scaling, clean URLs), otherwise falls back to plain Kubernetes. Set target explicitly to override. For Go apps, go.mod is auto-generated if not provided.",
 		MCP:         &MCPMetadata{ToolName: "deploy_artifact"},
+	},
+	{
+		ID:          "artifacts.deploy-from-repo",
+		Method:      "POST",
+		Path:        "/api/artifacts/from-repo",
+		Summary:     "Deploy a web artifact directly from a Git repository.",
+		Description: "Deploy a web artifact directly from a Git repository. vibeD clones the repository, optionally checks out a branch or specific commit, reads files from the selected subdirectory, applies the same file limits as deploy_artifact, and then starts the normal asynchronous deploy flow. Returns immediately with status \"building\" and an artifact_id — use get_artifact_status to poll until status is \"running\".",
+		MCP:         &MCPMetadata{ToolName: "deploy_from_repo"},
 	},
 	{
 		ID:          "artifacts.update",

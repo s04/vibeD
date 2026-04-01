@@ -52,3 +52,13 @@ func TestMustArtifactOperation(t *testing.T) {
 		t.Fatal("expected deploy API metadata")
 	}
 }
+
+func TestMustArtifactOperation_DeployFromRepo(t *testing.T) {
+	op := MustArtifactOperation("artifacts.deploy-from-repo")
+	if op.MCP == nil || op.MCP.ToolName != "deploy_from_repo" {
+		t.Fatal("expected deploy_from_repo MCP metadata")
+	}
+	if op.Method != "POST" || op.Path != "/api/artifacts/from-repo" {
+		t.Fatal("expected deploy-from-repo API metadata")
+	}
+}

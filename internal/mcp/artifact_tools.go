@@ -19,6 +19,9 @@ var artifactToolBindings = []artifactToolBinding{
 	identityArtifactBinding("artifacts.deploy", func(ctx context.Context, orch *orchestrator.Orchestrator, limits config.LimitsConfig, input operations.DeployArtifactRequest) (*orchestrator.DeployResult, error) {
 		return operations.DeployArtifact(ctx, orch, limits, input)
 	}),
+	identityArtifactBinding("artifacts.deploy-from-repo", func(ctx context.Context, orch *orchestrator.Orchestrator, limits config.LimitsConfig, input operations.DeployArtifactFromRepoRequest) (*orchestrator.DeployResult, error) {
+		return operations.DeployArtifactFromRepo(ctx, orch, limits, input)
+	}),
 	identityArtifactBinding("artifacts.update", func(ctx context.Context, orch *orchestrator.Orchestrator, limits config.LimitsConfig, input operations.UpdateArtifactRequest) (*orchestrator.DeployResult, error) {
 		return operations.UpdateArtifact(ctx, orch, limits, input)
 	}),

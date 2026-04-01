@@ -327,6 +327,55 @@ components:
         - name
         - files
 
+    DeployArtifactFromRepoRequest:
+      type: object
+      properties:
+        repo_url:
+          type: string
+          description: Git repository URL or local clone source
+          example: "https://github.com/example/project"
+        path:
+          type: string
+          description: Optional subdirectory inside the repository to deploy
+          example: "app"
+        branch:
+          type: string
+          description: Optional branch or tag to clone
+          example: "main"
+        commit:
+          type: string
+          description: Optional commit SHA to fetch and check out after cloning
+          example: "abc123def456"
+        auth_token:
+          type: string
+          description: Optional token used for HTTPS repository access
+        name:
+          type: string
+          description: Unique DNS-safe artifact name
+          example: "my-portfolio"
+        language:
+          type: string
+          description: Optional language/framework hint
+          example: "static"
+        target:
+          $ref: "#/components/schemas/DeploymentTarget"
+        env_vars:
+          type: object
+          additionalProperties:
+            type: string
+        secret_refs:
+          type: object
+          additionalProperties:
+            type: string
+          description: Secret references in format "secret-name:key"
+        port:
+          type: integer
+          description: Application port override
+          example: 3000
+      required:
+        - repo_url
+        - name
+
     UpdateArtifactRequest:
       type: object
       properties:
@@ -493,6 +542,42 @@ paths:
                 $ref: "#/components/schemas/DeployResult"
         "400":
           description: Invalid request body or file limits exceeded
+          content:
+            text/plain:
+              schema:
+                type: string
+        "409":
+          description: Artifact name already exists
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/artifacts/from-repo:
+    post:
+      tags:
+        - Artifacts
+      summary: Deploy an artifact from a Git repository
+      description: |
+        Clones a Git repository, optionally checks out a specific branch or commit,
+        reads files from the selected subdirectory, and starts the normal asynchronous
+        deploy flow. Returns immediately with the new artifact ID and an initial
+        `building` status.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeployArtifactFromRepoRequest"
+      responses:
+        "202":
+          description: Deployment accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeployResult"
+        "400":
+          description: Invalid request body, repo settings, or file limits exceeded
           content:
             text/plain:
               schema:
