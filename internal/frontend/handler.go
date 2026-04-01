@@ -23,6 +23,22 @@ import (
 	"github.com/vibed-project/vibeD/pkg/api"
 )
 
+type deployArtifactRequest struct {
+	Name       string            `json:"name"`
+	Files      map[string]string `json:"files"`
+	Language   string            `json:"language,omitempty"`
+	Target     string            `json:"target,omitempty"`
+	EnvVars    map[string]string `json:"env_vars,omitempty"`
+	SecretRefs map[string]string `json:"secret_refs,omitempty"`
+	Port       int               `json:"port,omitempty"`
+}
+
+type updateArtifactRequest struct {
+	Files      map[string]string `json:"files"`
+	EnvVars    map[string]string `json:"env_vars,omitempty"`
+	SecretRefs map[string]string `json:"secret_refs,omitempty"`
+}
+
 // writeError maps known API errors to appropriate HTTP status codes.
 // Unknown errors return 500 with a generic message to avoid leaking internals.
 func writeError(w http.ResponseWriter, err error, fallbackStatus int) {
@@ -54,8 +70,8 @@ func NewHandler(orch *orchestrator.Orchestrator, cfg *config.Config, bus *events
 	mux.HandleFunc("/api/events", handleSSE(bus, m))
 
 	// API routes
-	mux.HandleFunc("/api/artifacts", handleArtifacts(orch))
-	mux.HandleFunc("/api/artifacts/", handleArtifacts(orch))
+	mux.HandleFunc("/api/artifacts", handleArtifacts(orch, cfg.Limits))
+	mux.HandleFunc("/api/artifacts/", handleArtifacts(orch, cfg.Limits))
 	mux.HandleFunc("/api/targets", handleTargets(orch))
 	mux.HandleFunc("/api/whoami", handleWhoami(userStore))
 	mux.HandleFunc("/api/organization", handleOrganization(cfg))
@@ -80,7 +96,7 @@ func NewHandler(orch *orchestrator.Orchestrator, cfg *config.Config, bus *events
 	return limitRequestBody(mux, cfg.Limits.MaxTotalFileSize)
 }
 
-func handleArtifacts(orch *orchestrator.Orchestrator) http.HandlerFunc {
+func handleArtifacts(orch *orchestrator.Orchestrator, limits config.LimitsConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Handle /api/artifacts/{id} paths
 		path := strings.TrimPrefix(r.URL.Path, "/api/artifacts")
@@ -120,23 +136,106 @@ func handleArtifacts(orch *orchestrator.Orchestrator) http.HandlerFunc {
 				handleArtifactDelete(orch, artifactID, w, r)
 				return
 			}
+			if r.Method == http.MethodPut {
+				handleArtifactUpdate(orch, limits, artifactID, w, r)
+				return
+			}
 
 			handleArtifactDetail(orch, artifactID, w, r)
 			return
 		}
 
-		// List artifacts with pagination
-		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-		result, err := orch.List(r.Context(), r.URL.Query().Get("status"), offset, limit)
-		if err != nil {
-			writeError(w, err, http.StatusInternalServerError)
-			return
-		}
+		switch r.Method {
+		case http.MethodGet:
+			offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+			limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+			result, err := orch.List(r.Context(), r.URL.Query().Get("status"), offset, limit)
+			if err != nil {
+				writeError(w, err, http.StatusInternalServerError)
+				return
+			}
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(result)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(result)
+		case http.MethodPost:
+			handleArtifactDeploy(orch, limits, w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	}
+}
+
+func handleArtifactDeploy(orch *orchestrator.Orchestrator, limits config.LimitsConfig, w http.ResponseWriter, r *http.Request) {
+	var body deployArtifactRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := validateFileLimits(body.Files, limits); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	result, err := orch.AsyncDeploy(r.Context(), orchestrator.DeployRequest{
+		Name:       body.Name,
+		Files:      body.Files,
+		Language:   body.Language,
+		Target:     body.Target,
+		EnvVars:    body.EnvVars,
+		SecretRefs: body.SecretRefs,
+		Port:       body.Port,
+	})
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(result)
+}
+
+func handleArtifactUpdate(orch *orchestrator.Orchestrator, limits config.LimitsConfig, artifactID string, w http.ResponseWriter, r *http.Request) {
+	var body updateArtifactRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := validateFileLimits(body.Files, limits); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	result, err := orch.AsyncUpdate(r.Context(), orchestrator.UpdateRequest{
+		ArtifactID: artifactID,
+		Files:      body.Files,
+		EnvVars:    body.EnvVars,
+		SecretRefs: body.SecretRefs,
+	})
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(result)
+}
+
+func validateFileLimits(files map[string]string, limits config.LimitsConfig) error {
+	if limits.MaxFileCount > 0 && len(files) > limits.MaxFileCount {
+		return fmt.Errorf("too many files: %d exceeds maximum of %d", len(files), limits.MaxFileCount)
+	}
+
+	total := 0
+	for _, content := range files {
+		total += len(content)
+		if limits.MaxTotalFileSize > 0 && total > limits.MaxTotalFileSize {
+			return fmt.Errorf("total file size exceeds maximum of %d bytes (%d MB)", limits.MaxTotalFileSize, limits.MaxTotalFileSize/(1024*1024))
+		}
+	}
+
+	return nil
 }
 
 func handleArtifactDetail(orch *orchestrator.Orchestrator, id string, w http.ResponseWriter, r *http.Request) {
