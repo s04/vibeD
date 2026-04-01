@@ -18,26 +18,11 @@ import (
 	"github.com/vibed-project/vibeD/internal/config"
 	"github.com/vibed-project/vibeD/internal/events"
 	"github.com/vibed-project/vibeD/internal/metrics"
+	"github.com/vibed-project/vibeD/internal/operations"
 	"github.com/vibed-project/vibeD/internal/orchestrator"
 	"github.com/vibed-project/vibeD/internal/store"
 	"github.com/vibed-project/vibeD/pkg/api"
 )
-
-type deployArtifactRequest struct {
-	Name       string            `json:"name"`
-	Files      map[string]string `json:"files"`
-	Language   string            `json:"language,omitempty"`
-	Target     string            `json:"target,omitempty"`
-	EnvVars    map[string]string `json:"env_vars,omitempty"`
-	SecretRefs map[string]string `json:"secret_refs,omitempty"`
-	Port       int               `json:"port,omitempty"`
-}
-
-type updateArtifactRequest struct {
-	Files      map[string]string `json:"files"`
-	EnvVars    map[string]string `json:"env_vars,omitempty"`
-	SecretRefs map[string]string `json:"secret_refs,omitempty"`
-}
 
 // writeError maps known API errors to appropriate HTTP status codes.
 // Unknown errors return 500 with a generic message to avoid leaking internals.
@@ -109,7 +94,7 @@ func handleArtifacts(orch *orchestrator.Orchestrator, limits config.LimitsConfig
 			if len(parts) == 2 {
 				switch parts[1] {
 				case "logs":
-					handleArtifactLogs(orch, artifactID, w, r)
+					handleArtifactLogs(orch, limits, artifactID, w, r)
 					return
 				case "versions":
 					handleArtifactVersions(orch, artifactID, w, r)
@@ -149,7 +134,11 @@ func handleArtifacts(orch *orchestrator.Orchestrator, limits config.LimitsConfig
 		case http.MethodGet:
 			offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 			limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-			result, err := orch.List(r.Context(), r.URL.Query().Get("status"), offset, limit)
+			result, err := operations.ListArtifacts(r.Context(), orch, operations.ListArtifactsRequest{
+				Status: r.URL.Query().Get("status"),
+				Offset: offset,
+				Limit:  limit,
+			})
 			if err != nil {
 				writeError(w, err, http.StatusInternalServerError)
 				return
@@ -166,25 +155,12 @@ func handleArtifacts(orch *orchestrator.Orchestrator, limits config.LimitsConfig
 }
 
 func handleArtifactDeploy(orch *orchestrator.Orchestrator, limits config.LimitsConfig, w http.ResponseWriter, r *http.Request) {
-	var body deployArtifactRequest
+	var body operations.DeployArtifactRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if err := validateFileLimits(body.Files, limits); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	result, err := orch.AsyncDeploy(r.Context(), orchestrator.DeployRequest{
-		Name:       body.Name,
-		Files:      body.Files,
-		Language:   body.Language,
-		Target:     body.Target,
-		EnvVars:    body.EnvVars,
-		SecretRefs: body.SecretRefs,
-		Port:       body.Port,
-	})
+	result, err := operations.DeployArtifact(r.Context(), orch, limits, body)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -196,22 +172,13 @@ func handleArtifactDeploy(orch *orchestrator.Orchestrator, limits config.LimitsC
 }
 
 func handleArtifactUpdate(orch *orchestrator.Orchestrator, limits config.LimitsConfig, artifactID string, w http.ResponseWriter, r *http.Request) {
-	var body updateArtifactRequest
+	var body operations.UpdateArtifactRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if err := validateFileLimits(body.Files, limits); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	result, err := orch.AsyncUpdate(r.Context(), orchestrator.UpdateRequest{
-		ArtifactID: artifactID,
-		Files:      body.Files,
-		EnvVars:    body.EnvVars,
-		SecretRefs: body.SecretRefs,
-	})
+	body.ArtifactID = artifactID
+	result, err := operations.UpdateArtifact(r.Context(), orch, limits, body)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -222,68 +189,50 @@ func handleArtifactUpdate(orch *orchestrator.Orchestrator, limits config.LimitsC
 	json.NewEncoder(w).Encode(result)
 }
 
-func validateFileLimits(files map[string]string, limits config.LimitsConfig) error {
-	if limits.MaxFileCount > 0 && len(files) > limits.MaxFileCount {
-		return fmt.Errorf("too many files: %d exceeds maximum of %d", len(files), limits.MaxFileCount)
-	}
-
-	total := 0
-	for _, content := range files {
-		total += len(content)
-		if limits.MaxTotalFileSize > 0 && total > limits.MaxTotalFileSize {
-			return fmt.Errorf("total file size exceeds maximum of %d bytes (%d MB)", limits.MaxTotalFileSize, limits.MaxTotalFileSize/(1024*1024))
-		}
-	}
-
-	return nil
-}
-
 func handleArtifactDetail(orch *orchestrator.Orchestrator, id string, w http.ResponseWriter, r *http.Request) {
-	artifact, err := orch.Status(r.Context(), id)
+	artifact, err := operations.GetArtifactStatus(r.Context(), orch, operations.GetArtifactStatusRequest{ArtifactID: id})
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 
-	// Sanitize sensitive fields before returning
-	artifact.EnvVars = nil
-	artifact.StorageRef = ""
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(artifact)
 }
 
-func handleArtifactLogs(orch *orchestrator.Orchestrator, id string, w http.ResponseWriter, r *http.Request) {
-	logs, err := orch.Logs(r.Context(), id, 50)
+func handleArtifactLogs(orch *orchestrator.Orchestrator, limits config.LimitsConfig, id string, w http.ResponseWriter, r *http.Request) {
+	result, err := operations.GetArtifactLogs(r.Context(), orch, limits, operations.GetArtifactLogsRequest{
+		ArtifactID: id,
+		Lines:      50,
+	})
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"artifact_id": id,
-		"logs":        logs,
-	})
+	json.NewEncoder(w).Encode(result)
 }
 
 func handleArtifactDelete(orch *orchestrator.Orchestrator, id string, w http.ResponseWriter, r *http.Request) {
-	if err := orch.Delete(r.Context(), id); err != nil {
+	result, err := operations.DeleteArtifact(r.Context(), orch, operations.DeleteArtifactRequest{ArtifactID: id})
+	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "deleted",
-		"id":     id,
-	})
+	json.NewEncoder(w).Encode(result)
 }
 
 func handleTargets(orch *orchestrator.Orchestrator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		targets := orch.ListTargets()
+		targets, err := operations.ListTargets(r.Context(), orch)
+		if err != nil {
+			writeError(w, err, http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(targets)
 	}
@@ -295,17 +244,14 @@ func handleArtifactVersions(orch *orchestrator.Orchestrator, id string, w http.R
 		return
 	}
 
-	versions, err := orch.ListVersions(r.Context(), id)
+	result, err := operations.ListVersions(r.Context(), orch, operations.ListVersionsRequest{ArtifactID: id})
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"artifact_id": id,
-		"versions":    versions,
-	})
+	json.NewEncoder(w).Encode(result)
 }
 
 func handleArtifactRollback(orch *orchestrator.Orchestrator, id string, w http.ResponseWriter, r *http.Request) {
@@ -326,7 +272,10 @@ func handleArtifactRollback(orch *orchestrator.Orchestrator, id string, w http.R
 		return
 	}
 
-	result, err := orch.Rollback(r.Context(), id, body.Version)
+	result, err := operations.RollbackArtifact(r.Context(), orch, operations.RollbackArtifactRequest{
+		ArtifactID: id,
+		Version:    body.Version,
+	})
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -354,17 +303,17 @@ func handleArtifactShare(orch *orchestrator.Orchestrator, id string, w http.Resp
 		return
 	}
 
-	if err := orch.ShareArtifact(r.Context(), id, body.UserIDs); err != nil {
+	result, err := operations.ShareArtifact(r.Context(), orch, operations.ShareArtifactRequest{
+		ArtifactID: id,
+		UserIDs:    body.UserIDs,
+	})
+	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"artifact_id": id,
-		"shared_with": body.UserIDs,
-		"status":      "shared",
-	})
+	json.NewEncoder(w).Encode(result)
 }
 
 func handleArtifactUnshare(orch *orchestrator.Orchestrator, id string, w http.ResponseWriter, r *http.Request) {
@@ -385,17 +334,17 @@ func handleArtifactUnshare(orch *orchestrator.Orchestrator, id string, w http.Re
 		return
 	}
 
-	if err := orch.UnshareArtifact(r.Context(), id, body.UserIDs); err != nil {
+	result, err := operations.UnshareArtifact(r.Context(), orch, operations.UnshareArtifactRequest{
+		ArtifactID: id,
+		UserIDs:    body.UserIDs,
+	})
+	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"artifact_id": id,
-		"removed":     body.UserIDs,
-		"status":      "unshared",
-	})
+	json.NewEncoder(w).Encode(result)
 }
 
 func handleWhoami(userStore store.UserStore) http.HandlerFunc {
@@ -778,21 +727,11 @@ func handleArtifactShareLink(orch *orchestrator.Orchestrator, artifactID string,
 		json.NewDecoder(r.Body).Decode(&body)
 	}
 
-	var expiresIn time.Duration
-	if body.ExpiresIn != "" {
-		// Support "7d" as shorthand for 7 days
-		s := body.ExpiresIn
-		if strings.HasSuffix(s, "d") {
-			days := strings.TrimSuffix(s, "d")
-			if d, err := time.ParseDuration(days + "h"); err == nil {
-				expiresIn = d * 24
-			}
-		} else {
-			expiresIn, _ = time.ParseDuration(s)
-		}
-	}
-
-	link, err := orch.CreateShareLink(r.Context(), artifactID, body.Password, expiresIn)
+	link, err := operations.CreateShareLink(r.Context(), orch, operations.CreateShareLinkRequest{
+		ArtifactID: artifactID,
+		Password:   body.Password,
+		ExpiresIn:  body.ExpiresIn,
+	})
 	if err != nil {
 		writeError(w, err, http.StatusBadRequest)
 		return
@@ -810,13 +749,10 @@ func handleArtifactShareLinks(orch *orchestrator.Orchestrator, artifactID string
 		return
 	}
 
-	links, err := orch.ListShareLinks(r.Context(), artifactID)
+	links, err := operations.ListShareLinks(r.Context(), orch, operations.ListShareLinksRequest{ArtifactID: artifactID})
 	if err != nil {
 		writeError(w, err, http.StatusBadRequest)
 		return
-	}
-	if links == nil {
-		links = []api.ShareLink{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -836,12 +772,13 @@ func handleShareLinkRevoke(orch *orchestrator.Orchestrator) http.HandlerFunc {
 			return
 		}
 
-		if err := orch.RevokeShareLink(r.Context(), token); err != nil {
+		result, err := operations.RevokeShareLink(r.Context(), orch, operations.RevokeShareLinkRequest{Token: token})
+		if err != nil {
 			writeError(w, err, http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "revoked"})
+		json.NewEncoder(w).Encode(result)
 	}
 }
 

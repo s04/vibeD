@@ -27,7 +27,7 @@ Format:
 
 ## Next PR
 
-- Next PR: Reuse the shared `internal/operations` registry as the source of truth for MCP tool names and descriptions for the overlapping artifact lifecycle operations. This continues the effort to reduce duplicated edge-layer metadata while preserving the original tool wording.
+- Next PR: Make the artifact API the canonical definition for the overlapping deploy/list/status/share lifecycle operations, then derive the MCP tool surface from those same API operation definitions. This keeps the original tool wording but removes the separate API-vs-MCP implementation paths for the artifact surface.
 
 ## 2026-04-01
 

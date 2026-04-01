@@ -15,6 +15,12 @@ func TestArtifactOperations_MCPMetadataIsConsistent(t *testing.T) {
 		if op.ID == "" {
 			t.Fatal("operation ID must not be empty")
 		}
+		if op.Method == "" {
+			t.Fatalf("operation %s is missing method", op.ID)
+		}
+		if op.Path == "" {
+			t.Fatalf("operation %s is missing path", op.ID)
+		}
 		if _, ok := seenIDs[op.ID]; ok {
 			t.Fatalf("duplicate operation ID: %s", op.ID)
 		}
@@ -27,32 +33,13 @@ func TestArtifactOperations_MCPMetadataIsConsistent(t *testing.T) {
 			t.Fatalf("operation %s is missing description", op.ID)
 		}
 
-		if op.ExposesOn(SurfaceMCP) {
-			if op.MCP == nil || op.MCP.ToolName == "" {
-				t.Fatalf("operation %s exposes MCP but has no tool metadata", op.ID)
-			}
-			if _, ok := seenTools[op.MCP.ToolName]; ok {
-				t.Fatalf("duplicate MCP tool name: %s", op.MCP.ToolName)
-			}
-			seenTools[op.MCP.ToolName] = struct{}{}
+		if op.MCP == nil || op.MCP.ToolName == "" {
+			t.Fatalf("operation %s is missing MCP tool metadata", op.ID)
 		}
-	}
-}
-
-func TestOperation_ExposesOn(t *testing.T) {
-	op := Operation{
-		ID:       "example",
-		Surfaces: []Surface{SurfaceREST, SurfaceMCP},
-	}
-
-	if !op.ExposesOn(SurfaceREST) {
-		t.Fatal("expected REST exposure")
-	}
-	if !op.ExposesOn(SurfaceMCP) {
-		t.Fatal("expected MCP exposure")
-	}
-	if op.ExposesOn(Surface("other")) {
-		t.Fatal("did not expect other surface exposure")
+		if _, ok := seenTools[op.MCP.ToolName]; ok {
+			t.Fatalf("duplicate MCP tool name: %s", op.MCP.ToolName)
+		}
+		seenTools[op.MCP.ToolName] = struct{}{}
 	}
 }
 
@@ -60,5 +47,8 @@ func TestMustArtifactOperation(t *testing.T) {
 	op := MustArtifactOperation("artifacts.deploy")
 	if op.MCP == nil || op.MCP.ToolName != "deploy_artifact" {
 		t.Fatal("expected deploy MCP metadata")
+	}
+	if op.Method != "POST" || op.Path != "/api/artifacts" {
+		t.Fatal("expected deploy API metadata")
 	}
 }
