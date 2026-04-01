@@ -33,6 +33,7 @@ const sidebars = {
       items: [
         'mcp-tools/overview',
         'mcp-tools/deploy-artifact',
+        'mcp-tools/deploy-from-repo',
         'mcp-tools/list-artifacts',
         'mcp-tools/get-artifact-status',
         'mcp-tools/update-artifact',

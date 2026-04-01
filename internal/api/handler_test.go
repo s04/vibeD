@@ -84,6 +84,18 @@ func TestAPI_UpdateArtifact_NotFound(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "not found")
 }
 
+func TestAPI_DeployArtifactFromRepo_ValidationError(t *testing.T) {
+	handler := testHandler(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/artifacts/from-repo", bytes.NewBufferString(`{"name":"demo"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "repo_url is required")
+}
+
 func TestAPI_ListArtifacts_Pagination(t *testing.T) {
 	handler := testHandlerWithSQLiteArtifacts(t, []*pkgapi.Artifact{
 		newTestAPIArtifact("a1", "app-1"),

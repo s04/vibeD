@@ -28,13 +28,20 @@ COPY --from=frontend /app/internal/api/static/ /app/internal/api/static/
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /vibed ./cmd/vibed
 
-# Stage 3: Runtime (multi-arch via manifest)
-FROM gcr.io/distroless/static-debian12:nonroot
+# Stage 3: Runtime
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --create-home --home-dir /home/vibed --shell /usr/sbin/nologin vibed
 
 COPY --from=builder /vibed /vibed
 COPY vibed.yaml /etc/vibed/vibed.yaml
 
 EXPOSE 8080
+
+USER vibed
 
 ENTRYPOINT ["/vibed"]
 CMD ["--config", "/etc/vibed/vibed.yaml", "--transport", "http"]
