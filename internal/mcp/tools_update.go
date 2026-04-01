@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/vibed-project/vibeD/internal/config"
+	"github.com/vibed-project/vibeD/internal/operations"
 	"github.com/vibed-project/vibeD/internal/orchestrator"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -17,10 +18,10 @@ type updateArtifactInput struct {
 }
 
 func registerUpdateTool(server *mcp.Server, orch *orchestrator.Orchestrator, limits config.LimitsConfig) {
+	op := operations.MustArtifactOperation("artifacts.update")
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "update_artifact",
-		Description: "Update an existing deployed artifact with new source files. Triggers a rebuild and redeployment. " +
-			"Returns immediately with status \"building\" and the artifact_id — use get_artifact_status to poll until status is \"running\".",
+		Name:        op.MCP.ToolName,
+		Description: op.Description,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input updateArtifactInput) (*mcp.CallToolResult, *orchestrator.DeployResult, error) {
 		if err := validateFileLimits(input.Files, limits); err != nil {
 			return nil, nil, err
