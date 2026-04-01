@@ -13,11 +13,16 @@ Behavior:
   1. Verifies the current repo is on main
   2. Fast-forwards local main from origin/main
   3. Creates a branch from the title
-  4. Commits all current changes with the PR title as the commit message
+  4. Commits only the currently staged changes with the PR title as the commit message
   5. Pushes the branch
   6. Opens a PR against main
   7. Merges the PR
   8. Deletes the remote branch and fast-forwards local main
+
+Important:
+  - This script uses the staged set as the PR boundary.
+  - Stage files explicitly before running it.
+  - Unstaged changes are left alone.
 
 Options:
   --body TEXT         Inline PR body
@@ -60,6 +65,29 @@ require_clean_main_branch() {
   if [[ "$current_branch" != "main" ]]; then
     echo "This script must be started from local main. Current branch: $current_branch" >&2
     exit 1
+  fi
+}
+
+require_staged_changes() {
+  if [[ -z "$(git diff --cached --name-only)" ]]; then
+    echo "No staged changes found. Stage the files for this PR first." >&2
+    exit 1
+  fi
+}
+
+warn_for_unstaged_changes() {
+  local unstaged
+  unstaged="$(git diff --name-only)"
+  if [[ -n "$unstaged" ]]; then
+    echo "Warning: unstaged changes will not be included in this PR:" >&2
+    echo "$unstaged" >&2
+  fi
+
+  local untracked
+  untracked="$(git ls-files --others --exclude-standard)"
+  if [[ -n "$untracked" ]]; then
+    echo "Warning: untracked files will not be included unless staged:" >&2
+    echo "$untracked" >&2
   fi
 }
 
@@ -143,11 +171,8 @@ case "$MERGE_METHOD" in
 esac
 
 require_clean_main_branch
-
-if [[ -z "$(git status --short)" ]]; then
-  echo "No local changes to commit." >&2
-  exit 1
-fi
+require_staged_changes
+warn_for_unstaged_changes
 
 timestamp="$(date +%Y%m%d-%H%M%S)"
 slug="$(slugify "$TITLE")"
@@ -163,7 +188,6 @@ printf '%s\n' "$BODY" >"$tmp_body"
 run git fetch origin main
 run git pull --ff-only origin main
 run git switch -c "$branch"
-run git add -A
 run git commit -m "$TITLE"
 run git push -u origin "$branch"
 run gh pr create --base main --head "$branch" --title "$TITLE" --body-file "$tmp_body"
