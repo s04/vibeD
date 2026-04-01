@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   build: {
-    outDir: '../internal/frontend/static',
+    outDir: '../internal/api/static',
     emptyOutDir: true,
   },
   server: {

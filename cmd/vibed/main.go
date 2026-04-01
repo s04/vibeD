@@ -13,13 +13,13 @@ import (
 	"syscall"
 	"time"
 
+	internalapi "github.com/vibed-project/vibeD/internal/api"
 	vibedauth "github.com/vibed-project/vibeD/internal/auth"
 	"github.com/vibed-project/vibeD/internal/builder"
 	"github.com/vibed-project/vibeD/internal/config"
 	"github.com/vibed-project/vibeD/internal/deployer"
 	"github.com/vibed-project/vibeD/internal/environment"
 	"github.com/vibed-project/vibeD/internal/events"
-	"github.com/vibed-project/vibeD/internal/frontend"
 	"github.com/vibed-project/vibeD/internal/gc"
 	"github.com/vibed-project/vibeD/internal/health"
 	"github.com/vibed-project/vibeD/internal/k8s"
@@ -331,8 +331,8 @@ func runHTTPServer(ctx context.Context, cfg *config.Config, mcpServer *mcp.Serve
 	}
 
 	// Frontend + API
-	frontendHandler := frontend.NewHandler(orch, cfg, bus, m, userStore)
-	mux.Handle("/", frontendHandler)
+	apiHandler := internalapi.NewHandler(orch, cfg, bus, m, userStore)
+	mux.Handle("/", apiHandler)
 
 	// Build handler chain: role → auth (selective) → metrics → mux
 	var handler http.Handler = mux
