@@ -25,10 +25,6 @@ Format:
 
 ## Current Entries
 
-## Next PR
-
-- Next PR: Replace the remaining explicit artifact MCP registration calls with a small declarative binding table. The artifact API stays canonical, but the MCP adapter becomes more obviously data-driven and leaves only the genuinely custom projections as code.
-
 ## 2026-04-01
 
 - PR #1: Added an initial PR-loop workflow script and introduced first-pass REST deploy/update endpoints for artifacts (`POST /api/artifacts`, `PUT /api/artifacts/{id}`), along with matching OpenAPI updates and handler tests. This was the fork's first step toward making deployment usable without relying only on MCP.
@@ -37,3 +33,4 @@ Format:
 - PR #4: Added a shared `internal/operations` foundation package that defines the overlapping artifact lifecycle operations in one canonical registry. This is groundwork for reducing duplication between REST and MCP without changing deployment behavior yet.
 - PR #7: Made the artifact API operations the canonical definition for the overlapping artifact lifecycle surface, then derived the artifact MCP tool registrations from those same API operations. This removes the separate API-vs-MCP implementation paths for artifact deploy/list/status/share behavior while preserving the existing MCP tool names and descriptions.
 - PR #8: Simplified the artifact MCP adapter by replacing the remaining repetitive output-shaping glue with one generic registration path plus a small set of explicit projection helpers. This keeps the API-first structure from PR #7, but makes the MCP side easier to read and cheaper to extend.
+- PR #9: Replaced the remaining explicit artifact MCP registration calls with a small declarative binding table. The artifact API remains canonical, but the MCP adapter is now more obviously data-driven and leaves only the genuinely custom projections as code.
