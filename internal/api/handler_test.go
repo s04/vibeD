@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
@@ -84,7 +85,7 @@ func TestAPI_UpdateArtifact_NotFound(t *testing.T) {
 }
 
 func TestAPI_ListArtifacts_Pagination(t *testing.T) {
-	handler := testHandlerWithArtifacts(t, []*pkgapi.Artifact{
+	handler := testHandlerWithSQLiteArtifacts(t, []*pkgapi.Artifact{
 		newTestAPIArtifact("a1", "app-1"),
 		newTestAPIArtifact("a2", "app-2"),
 		newTestAPIArtifact("a3", "app-3"),
@@ -115,7 +116,7 @@ func TestAPI_ListArtifacts_DefaultPagination(t *testing.T) {
 		))
 	}
 
-	handler := testHandlerWithArtifacts(t, artifacts)
+	handler := testHandlerWithSQLiteArtifacts(t, artifacts)
 	req := httptest.NewRequest(http.MethodGet, "/api/artifacts", nil)
 	rec := httptest.NewRecorder()
 
@@ -140,7 +141,7 @@ func TestAPI_ListArtifacts_ClampsLimit(t *testing.T) {
 		))
 	}
 
-	handler := testHandlerWithArtifacts(t, artifacts)
+	handler := testHandlerWithSQLiteArtifacts(t, artifacts)
 	req := httptest.NewRequest(http.MethodGet, "/api/artifacts?limit=500", nil)
 	rec := httptest.NewRecorder()
 
@@ -180,6 +181,25 @@ func testHandlerWithArtifacts(t *testing.T, artifacts []*pkgapi.Artifact) http.H
 		MaxFileCount:     500,
 		MaxTotalFileSize: 50 * 1024 * 1024,
 	}, memStore)
+}
+
+func testHandlerWithSQLiteArtifacts(t *testing.T, artifacts []*pkgapi.Artifact) http.Handler {
+	t.Helper()
+	sqliteStore, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "artifacts.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { sqliteStore.Close() })
+
+	ctx := context.Background()
+	for i, artifact := range artifacts {
+		artifact.CreatedAt = artifact.CreatedAt.Add(time.Duration(i) * time.Second)
+		artifact.UpdatedAt = artifact.CreatedAt
+		require.NoError(t, sqliteStore.Create(ctx, artifact))
+	}
+
+	return testHandlerWithStore(t, config.LimitsConfig{
+		MaxFileCount:     500,
+		MaxTotalFileSize: 50 * 1024 * 1024,
+	}, sqliteStore)
 }
 
 func testHandlerWithStore(t *testing.T, limits config.LimitsConfig, artifactStore store.ArtifactStore) http.Handler {

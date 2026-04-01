@@ -25,6 +25,7 @@ type Config struct {
 	Limits       LimitsConfig       `yaml:"limits"`
 	GC           GCConfig           `yaml:"gc"`
 	Tracing      TracingConfig      `yaml:"tracing"`
+	Webhooks     []WebhookConfig    `yaml:"webhooks"`
 }
 
 // TracingConfig configures OpenTelemetry distributed tracing.
@@ -94,7 +95,7 @@ type UserGitHubConf struct {
 
 // UserGitLabConf is per-user GitLab storage configuration.
 type UserGitLabConf struct {
-	URL       string `yaml:"url,omitempty"`   // defaults "https://gitlab.com"
+	URL       string `yaml:"url,omitempty"` // defaults "https://gitlab.com"
 	ProjectID int    `yaml:"projectID"`
 	Branch    string `yaml:"branch,omitempty"` // defaults "main"
 	Token     string `yaml:"token,omitempty"`  // supports "env:VAR" and "file:PATH"
@@ -130,8 +131,8 @@ type DeploymentConfig struct {
 }
 
 type BuilderConfig struct {
-	Engine           string        `yaml:"engine"`           // "pack" or "buildah" (default: "buildah")
-	Image            string        `yaml:"image"`            // buildpacks builder image (pack only)
+	Engine           string        `yaml:"engine"` // "pack" or "buildah" (default: "buildah")
+	Image            string        `yaml:"image"`  // buildpacks builder image (pack only)
 	RunImage         string        `yaml:"runImage"`
 	PullPolicy       string        `yaml:"pullPolicy"`
 	ContainerRuntime string        `yaml:"containerRuntime"` // "auto", "docker", "podman"
@@ -212,6 +213,14 @@ type GCConfig struct {
 	Interval string `yaml:"interval"` // GC cycle interval (default: "1h")
 	MaxAge   string `yaml:"maxAge"`   // Age threshold for orphaned resources (default: "24h")
 	DryRun   bool   `yaml:"dryRun"`   // Log without deleting (default: false)
+}
+
+// WebhookConfig configures one outbound webhook subscription.
+type WebhookConfig struct {
+	URL     string   `yaml:"url"`
+	Events  []string `yaml:"events"`
+	Secret  string   `yaml:"secret,omitempty"`
+	Timeout string   `yaml:"timeout,omitempty"`
 }
 
 // Default returns a Config with sensible defaults.
@@ -598,6 +607,20 @@ func validate(cfg *Config) error {
 		}
 		if _, err := time.ParseDuration(cfg.GC.MaxAge); err != nil {
 			return fmt.Errorf("gc.maxAge must be a valid duration (got %q): %w", cfg.GC.MaxAge, err)
+		}
+	}
+
+	for i, webhook := range cfg.Webhooks {
+		if webhook.URL == "" {
+			return fmt.Errorf("webhooks[%d].url is required", i)
+		}
+		if len(webhook.Events) == 0 {
+			return fmt.Errorf("webhooks[%d].events must contain at least one event or \"*\"", i)
+		}
+		if webhook.Timeout != "" {
+			if _, err := time.ParseDuration(webhook.Timeout); err != nil {
+				return fmt.Errorf("webhooks[%d].timeout must be a valid duration (got %q): %w", i, webhook.Timeout, err)
+			}
 		}
 	}
 

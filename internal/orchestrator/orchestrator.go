@@ -72,14 +72,14 @@ type DeployResult struct {
 
 // Orchestrator coordinates the full deploy/update/delete lifecycle.
 type Orchestrator struct {
-	cfg         *config.Config
-	detector    *environment.Detector
-	builder builder.Builder
-	factory *deployer.Factory
-	storage     storage.Storage
-	store       store.ArtifactStore
-	metrics     *metrics.Metrics
-	clientset   kubernetes.Interface
+	cfg            *config.Config
+	detector       *environment.Detector
+	builder        builder.Builder
+	factory        *deployer.Factory
+	storage        storage.Storage
+	store          store.ArtifactStore
+	metrics        *metrics.Metrics
+	clientset      kubernetes.Interface
 	events         *events.EventBus
 	shareLinkStore store.ShareLinkStore
 	imageBase      string
@@ -107,19 +107,19 @@ func NewOrchestrator(
 	}
 
 	return &Orchestrator{
-		cfg:      cfg,
-		detector: detector,
-		builder:  bldr,
-		factory:  factory,
-		storage:     stg,
-		store:       st,
-		metrics:     m,
-		clientset:   clientset,
+		cfg:            cfg,
+		detector:       detector,
+		builder:        bldr,
+		factory:        factory,
+		storage:        stg,
+		store:          st,
+		metrics:        m,
+		clientset:      clientset,
 		events:         bus,
 		shareLinkStore: shareLinkStore,
 		imageBase:      imageBase,
 		tracer:         otel.Tracer("vibed/orchestrator"),
-		logger:      logger,
+		logger:         logger,
 	}
 }
 
@@ -271,11 +271,11 @@ func (o *Orchestrator) doDeploy(ctx context.Context, req DeployRequest) (*Deploy
 	now := time.Now()
 
 	artifact := &api.Artifact{
-		ID:        artifactID,
-		Name:      req.Name,
-		OwnerID:   vibedauth.UserIDFromContext(ctx),
-		Status:    api.StatusPending,
-		Language:  req.Language,
+		ID:         artifactID,
+		Name:       req.Name,
+		OwnerID:    vibedauth.UserIDFromContext(ctx),
+		Status:     api.StatusPending,
+		Language:   req.Language,
 		EnvVars:    req.EnvVars,
 		SecretRefs: req.SecretRefs,
 		Port:       req.Port,
@@ -726,7 +726,7 @@ func (o *Orchestrator) Delete(ctx context.Context, artifactID string) error {
 
 	o.metrics.DeletesTotal.WithLabelValues("success").Inc()
 	o.metrics.ArtifactsActive.WithLabelValues(string(artifact.Target)).Dec()
-	o.publishDeleteEvent(artifactID)
+	o.publishDeleteEvent(artifact)
 	return nil
 }
 
@@ -866,24 +866,32 @@ func (o *Orchestrator) publishStatusEvent(artifact *api.Artifact) {
 		return
 	}
 	o.events.Publish(events.Event{
-		Type:       events.ArtifactStatusChanged,
-		ArtifactID: artifact.ID,
-		OwnerID:    artifact.OwnerID,
-		Status:     string(artifact.Status),
-		Error:      artifact.Error,
-		Timestamp:  artifact.UpdatedAt,
+		Type:         events.ArtifactStatusChanged,
+		ArtifactID:   artifact.ID,
+		ArtifactName: artifact.Name,
+		OwnerID:      artifact.OwnerID,
+		Target:       string(artifact.Target),
+		URL:          artifact.URL,
+		Status:       string(artifact.Status),
+		Error:        artifact.Error,
+		Timestamp:    artifact.UpdatedAt,
 	})
 }
 
 // publishDeleteEvent publishes an artifact deletion event to the event bus.
-func (o *Orchestrator) publishDeleteEvent(artifactID string) {
+func (o *Orchestrator) publishDeleteEvent(artifact *api.Artifact) {
 	if o.events == nil {
 		return
 	}
 	o.events.Publish(events.Event{
-		Type:       events.ArtifactDeleted,
-		ArtifactID: artifactID,
-		Timestamp:  time.Now(),
+		Type:         events.ArtifactDeleted,
+		ArtifactID:   artifact.ID,
+		ArtifactName: artifact.Name,
+		OwnerID:      artifact.OwnerID,
+		Target:       string(artifact.Target),
+		URL:          artifact.URL,
+		Status:       string(artifact.Status),
+		Timestamp:    time.Now(),
 	})
 }
 

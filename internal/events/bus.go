@@ -24,13 +24,16 @@ const (
 
 // Event represents a single lifecycle event for an artifact.
 type Event struct {
-	ID         string    `json:"id"`
-	Type       EventType `json:"type"`
-	ArtifactID string    `json:"artifact_id"`
-	OwnerID    string    `json:"owner_id,omitempty"`
-	Status     string    `json:"status,omitempty"`
-	Error      string    `json:"error,omitempty"`
-	Timestamp  time.Time `json:"timestamp"`
+	ID           string    `json:"id"`
+	Type         EventType `json:"type"`
+	ArtifactID   string    `json:"artifact_id"`
+	ArtifactName string    `json:"artifact_name,omitempty"`
+	OwnerID      string    `json:"owner_id,omitempty"`
+	Target       string    `json:"target,omitempty"`
+	URL          string    `json:"url,omitempty"`
+	Status       string    `json:"status,omitempty"`
+	Error        string    `json:"error,omitempty"`
+	Timestamp    time.Time `json:"timestamp"`
 }
 
 // subscriberBufferSize is the channel buffer for each subscriber.

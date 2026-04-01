@@ -131,7 +131,20 @@ done
 | 5 | MCP pagination | `list_artifacts` with `limit: 2, offset: 0` | Response includes `total`, `offset`, `limit` fields |
 | 6 | Empty result | `GET /api/artifacts?offset=9999` | Returns empty artifacts array, `total` still correct |
 
-**Automation opportunity:** Add to `sqlite_test.go` — create N artifacts, verify List with various offset/limit combos. Add to `handler_integration_test.go` for REST API pagination.
+**Automation status:** Covered by `internal/store/sqlite_test.go` and `internal/api/handler_test.go`.
+
+---
+
+#### Webhook Notifications
+
+| # | Test | Steps | Expected |
+|---|------|-------|----------|
+| 1 | Matching event delivery | Configure a webhook for `deploy.completed`. Publish a `running` lifecycle event. | Receiver gets one `POST` with `X-VibeD-Event: deploy.completed` |
+| 2 | HMAC signature | Configure `secret`. Publish a matching event. | Receiver validates `X-VibeD-Signature: sha256=...` against the JSON body |
+| 3 | Retry policy | Return `502` three times, then `204` | Dispatcher retries 3 times, then succeeds |
+| 4 | Event filter | Configure only `deploy.completed`. Publish `deploy.building`. | No webhook delivered |
+
+**Automation status:** Covered by `internal/webhooks/dispatcher_test.go`.
 
 ---
 
