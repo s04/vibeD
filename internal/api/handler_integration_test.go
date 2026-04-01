@@ -1,6 +1,6 @@
 //go:build integration
 
-package frontend_test
+package api_test
 
 import (
 	"encoding/json"
@@ -10,15 +10,15 @@ import (
 	"os"
 	"testing"
 
+	internalapi "github.com/vibed-project/vibeD/internal/api"
 	"github.com/vibed-project/vibeD/internal/config"
 	"github.com/vibed-project/vibeD/internal/deployer"
 	"github.com/vibed-project/vibeD/internal/environment"
-	"github.com/vibed-project/vibeD/internal/frontend"
 	"github.com/vibed-project/vibeD/internal/metrics"
 	"github.com/vibed-project/vibeD/internal/orchestrator"
 	"github.com/vibed-project/vibeD/internal/storage"
 	"github.com/vibed-project/vibeD/internal/store"
-	"github.com/vibed-project/vibeD/pkg/api"
+	vibedapi "github.com/vibed-project/vibeD/pkg/api"
 	"github.com/vibed-project/vibeD/tests/testutil"
 
 	"github.com/stretchr/testify/assert"
@@ -28,8 +28,8 @@ import (
 // Note: environment import used by TestAPI_ListTargets
 
 func TestAPI_ListArtifacts_Empty(t *testing.T) {
-	orch := testAPIOrchSimple(t)
-	handler := frontend.NewHandler(orch)
+	orch, cfg, m := testAPIOrchSimple(t)
+	handler := internalapi.NewHandler(orch, cfg, nil, m, nil)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
@@ -39,7 +39,7 @@ func TestAPI_ListArtifacts_Empty(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var artifacts []api.ArtifactSummary
+	var artifacts []vibedapi.ArtifactSummary
 	err = json.NewDecoder(resp.Body).Decode(&artifacts)
 	require.NoError(t, err)
 	assert.Empty(t, artifacts)
@@ -61,7 +61,7 @@ func TestAPI_ListTargets(t *testing.T) {
 	m := metrics.New()
 
 	orch := orchestrator.NewOrchestrator(cfg, detector, mockBuilder, factory, localStorage, memStore, m, logger)
-	handler := frontend.NewHandler(orch)
+	handler := internalapi.NewHandler(orch, cfg, nil, m, nil)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
@@ -71,15 +71,15 @@ func TestAPI_ListTargets(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var targets []api.TargetInfo
+	var targets []vibedapi.TargetInfo
 	err = json.NewDecoder(resp.Body).Decode(&targets)
 	require.NoError(t, err)
 	assert.NotEmpty(t, targets)
 }
 
 func TestAPI_ArtifactNotFound(t *testing.T) {
-	orch := testAPIOrchSimple(t)
-	handler := frontend.NewHandler(orch)
+	orch, cfg, m := testAPIOrchSimple(t)
+	handler := internalapi.NewHandler(orch, cfg, nil, m, nil)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
@@ -93,7 +93,7 @@ func TestAPI_ArtifactNotFound(t *testing.T) {
 // testAPIOrchSimple creates a minimal orchestrator that doesn't need a cluster.
 // It uses nil detector, which means ListTargets will panic — only use for
 // tests that don't call ListTargets.
-func testAPIOrchSimple(t *testing.T) *orchestrator.Orchestrator {
+func testAPIOrchSimple(t *testing.T) (*orchestrator.Orchestrator, *config.Config, *metrics.Metrics) {
 	t.Helper()
 	tmpDir := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -117,5 +117,5 @@ func testAPIOrchSimple(t *testing.T) *orchestrator.Orchestrator {
 	factory := deployer.NewFactory()
 	m := metrics.New()
 
-	return orchestrator.NewOrchestrator(cfg, nil, mockBuilder, factory, localStorage, memStore, m, logger)
+	return orchestrator.NewOrchestrator(cfg, nil, mockBuilder, factory, localStorage, memStore, m, logger), cfg, m
 }

@@ -5,7 +5,7 @@ WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ .
-COPY internal/frontend/static/ /app/internal/frontend/static/
+COPY internal/api/static/ /app/internal/api/static/
 RUN npm run build
 
 # Stage 2: Build Go binary (cross-compile natively, no QEMU needed)
@@ -24,7 +24,7 @@ RUN go mod download
 
 COPY . .
 # Copy built frontend assets from Stage 1
-COPY --from=frontend /app/internal/frontend/static/ /app/internal/frontend/static/
+COPY --from=frontend /app/internal/api/static/ /app/internal/api/static/
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /vibed ./cmd/vibed
 

@@ -44,7 +44,7 @@ These require a Kind cluster (`make dev` or `make test-integration-setup`). Tagg
 | **K8s Deployer** | `internal/deployer/kubernetes_integration_test.go` | 7 | Deploy, update, delete, logs, URL, full lifecycle |
 | **Knative Deployer** | `internal/deployer/knative_integration_test.go` | 5 | Deploy, update, delete, full lifecycle (skipped if no Knative CRDs) |
 | **Orchestrator** | `internal/orchestrator/orchestrator_integration_test.go` | 11 | Deploy, list, filter, update, delete, targets, invalid input, duplicates, build failures, logs |
-| **HTTP API** | `internal/frontend/handler_integration_test.go` | 3 | List artifacts, list targets, 404 for missing artifact |
+| **HTTP API** | `internal/api/handler_integration_test.go` | 3 | List artifacts, list targets, 404 for missing artifact |
 | **Authentication** | `internal/auth/auth_integration_test.go` | 8 | Valid/invalid keys, missing token, skip paths, env var keys |
 | **Health Checks** | `internal/health/health_integration_test.go` | 7 | Liveness, readiness, component details, not-ready state |
 | **Environment Detection** | `internal/environment/detector_integration_test.go` | 5 | K8s/Knative detection, target selection |

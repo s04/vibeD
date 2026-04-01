@@ -1,4 +1,4 @@
-package frontend
+package api
 
 import (
 	"crypto/rand"
@@ -21,22 +21,22 @@ import (
 	"github.com/vibed-project/vibeD/internal/operations"
 	"github.com/vibed-project/vibeD/internal/orchestrator"
 	"github.com/vibed-project/vibeD/internal/store"
-	"github.com/vibed-project/vibeD/pkg/api"
+	vibedapi "github.com/vibed-project/vibeD/pkg/api"
 )
 
 // writeError maps known API errors to appropriate HTTP status codes.
 // Unknown errors return 500 with a generic message to avoid leaking internals.
 func writeError(w http.ResponseWriter, err error, fallbackStatus int) {
 	switch err.(type) {
-	case *api.ErrNotFound:
+	case *vibedapi.ErrNotFound:
 		http.Error(w, "not found", http.StatusNotFound)
-	case *api.ErrAlreadyExists:
+	case *vibedapi.ErrAlreadyExists:
 		http.Error(w, err.Error(), http.StatusConflict)
-	case *api.ErrInvalidInput:
+	case *vibedapi.ErrInvalidInput:
 		http.Error(w, err.Error(), http.StatusBadRequest)
-	case *api.ErrShareLinkNotFound:
+	case *vibedapi.ErrShareLinkNotFound:
 		http.Error(w, "not found", http.StatusNotFound)
-	case *api.ErrPasswordRequired:
+	case *vibedapi.ErrPasswordRequired:
 		http.Error(w, "password required", http.StatusUnauthorized)
 	default:
 		http.Error(w, "internal server error", fallbackStatus)
@@ -446,7 +446,7 @@ func handleUsers(userStore store.UserStore) http.HandlerFunc {
 			keyHash := hex.EncodeToString(hash[:])
 
 			now := time.Now()
-			user := &api.User{
+			user := &vibedapi.User{
 				ID:           fmt.Sprintf("u-%x", now.UnixNano()),
 				Name:         body.Name,
 				Email:        body.Email,
@@ -464,7 +464,7 @@ func handleUsers(userStore store.UserStore) http.HandlerFunc {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(api.UserWithKey{User: *user, APIKey: plainKey})
+			json.NewEncoder(w).Encode(vibedapi.UserWithKey{User: *user, APIKey: plainKey})
 
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -584,7 +584,7 @@ func handleDepartments(userStore store.UserStore) http.HandlerFunc {
 				return
 			}
 			if depts == nil {
-				depts = []api.Department{}
+				depts = []vibedapi.Department{}
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(depts)
@@ -602,7 +602,7 @@ func handleDepartments(userStore store.UserStore) http.HandlerFunc {
 				return
 			}
 			now := time.Now()
-			dept := &api.Department{
+			dept := &vibedapi.Department{
 				ID:        fmt.Sprintf("dept-%x", now.UnixNano()),
 				Name:      body.Name,
 				CreatedAt: now,

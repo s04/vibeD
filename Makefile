@@ -170,7 +170,7 @@ teardown:
 clean:
 	rm -rf bin/
 	rm -rf web/dist/
-	rm -rf internal/frontend/static/assets/
-	rm -rf internal/frontend/static/vite.svg
+	rm -rf internal/api/static/assets/
+	rm -rf internal/api/static/vite.svg
 	rm -rf docs/build/
 	rm -rf docs/.docusaurus/
