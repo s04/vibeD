@@ -16,6 +16,7 @@ import (
 	"github.com/vibed-project/vibeD/internal/config"
 	"github.com/vibed-project/vibeD/internal/deployer"
 	"github.com/vibed-project/vibeD/internal/metrics"
+	"github.com/vibed-project/vibeD/internal/operations"
 	"github.com/vibed-project/vibeD/internal/orchestrator"
 	"github.com/vibed-project/vibeD/internal/storage"
 	"github.com/vibed-project/vibeD/internal/store"
@@ -45,9 +46,25 @@ func TestAPI_DeployArtifact_ValidationError(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "at least one file is required")
 }
 
+func TestAPI_DeployArtifact_FileLimitError(t *testing.T) {
+	handler := testHandlerWithLimits(t, config.LimitsConfig{
+		MaxFileCount:     2,
+		MaxTotalFileSize: 1024,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/artifacts", bytes.NewBufferString(`{"name":"demo","files":{"a.txt":"1","b.txt":"2","c.txt":"3"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), `invalid input for "files"`)
+	assert.Contains(t, rec.Body.String(), "too many files")
+}
+
 func TestAPI_UpdateArtifact_NotFound(t *testing.T) {
 	handler := testHandler(t)
-	body, err := json.Marshal(updateArtifactRequest{
+	body, err := json.Marshal(operations.UpdateArtifactRequest{
 		Files: map[string]string{"index.html": "<h1>hi</h1>"},
 	})
 	require.NoError(t, err)
@@ -63,6 +80,14 @@ func TestAPI_UpdateArtifact_NotFound(t *testing.T) {
 }
 
 func testHandler(t *testing.T) http.Handler {
+	t.Helper()
+	return testHandlerWithLimits(t, config.LimitsConfig{
+		MaxFileCount:     500,
+		MaxTotalFileSize: 50 * 1024 * 1024,
+	})
+}
+
+func testHandlerWithLimits(t *testing.T, limits config.LimitsConfig) http.Handler {
 	t.Helper()
 
 	tmpDir := t.TempDir()
@@ -84,10 +109,7 @@ func testHandler(t *testing.T) http.Handler {
 		Registry: config.RegistryConfig{
 			Enabled: false,
 		},
-		Limits: config.LimitsConfig{
-			MaxFileCount:     500,
-			MaxTotalFileSize: 50 * 1024 * 1024,
-		},
+		Limits: limits,
 	}
 
 	m := testMetrics()

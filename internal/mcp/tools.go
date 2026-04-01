@@ -10,20 +10,7 @@ import (
 
 // RegisterTools registers all vibeD MCP tools with the server.
 func RegisterTools(server *mcp.Server, orch *orchestrator.Orchestrator, limits config.LimitsConfig, userStore store.UserStore) {
-	registerDeployTool(server, orch, limits)
-	registerListTool(server, orch)
-	registerStatusTool(server, orch)
-	registerDeleteTool(server, orch)
-	registerLogsTool(server, orch, limits)
-	registerTargetsTool(server, orch)
-	registerUpdateTool(server, orch, limits)
-	registerListVersionsTool(server, orch)
-	registerRollbackTool(server, orch)
-	registerShareTool(server, orch)
-	registerUnshareTool(server, orch)
-	registerCreateShareLinkTool(server, orch)
-	registerListShareLinksTool(server, orch)
-	registerRevokeShareLinkTool(server, orch)
+	registerArtifactOperations(server, orch, limits)
 	if userStore != nil {
 		registerListUsersTool(server, userStore)
 		registerGetUserTool(server, userStore)
