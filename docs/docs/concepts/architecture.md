@@ -56,11 +56,12 @@ vibeD is a single Go binary that serves three concerns:
 
 ## Real-Time Events
 
-vibeD includes an in-memory EventBus (`internal/events`) that publishes artifact lifecycle events. The orchestrator emits events on every status transition (pending → building → deploying → running, or failed/deleted), and connected clients receive them instantly via Server-Sent Events (SSE) at `GET /api/events`.
+vibeD includes an in-memory EventBus (`internal/events`) that publishes artifact lifecycle events. The orchestrator emits events on every status transition (pending → building → deploying → running, or failed/deleted), and connected clients receive them instantly via Server-Sent Events (SSE) at `GET /api/events`. The same event stream can also fan out to configured outbound webhooks for external systems like Slack, CI, or audit sinks.
 
 ```
 Orchestrator ──publish──► EventBus ──fan-out──► SSE Handler ──stream──► Dashboard
-                                   └──────────► SSE Handler ──stream──► Dashboard (tab 2)
+                                   ├──────────► SSE Handler ──stream──► Dashboard (tab 2)
+                                   └──────────► Webhook Dispatcher ──POST──► External systems
 ```
 
 Key characteristics:
@@ -77,4 +78,4 @@ Key characteristics:
 | **Builder** | `Builder` | Buildah (K8s Jobs) — auto-generates Dockerfiles per language |
 | **Deployer** | `Deployer` | Knative, Kubernetes |
 | **Registry** | `Registry` | Any OCI-compatible registry |
-| **EventBus** | — | In-memory pub/sub with SSE streaming |
+| **EventBus** | — | In-memory pub/sub with SSE and webhook fan-out |

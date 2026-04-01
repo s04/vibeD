@@ -30,6 +30,7 @@ import (
 	"github.com/vibed-project/vibeD/internal/storage"
 	"github.com/vibed-project/vibeD/internal/store"
 	vibedtracing "github.com/vibed-project/vibeD/internal/tracing"
+	"github.com/vibed-project/vibeD/internal/webhooks"
 	"github.com/vibed-project/vibeD/pkg/api"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -277,6 +278,16 @@ func main() {
 	// Run based on transport mode
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	if len(cfg.Webhooks) > 0 {
+		dispatcher, err := webhooks.NewDispatcher(cfg.Webhooks, bus, logger)
+		if err != nil {
+			logger.Error("failed to initialize webhooks", "error", err)
+			os.Exit(1)
+		}
+		dispatcher.Start(ctx)
+		logger.Info("webhook dispatcher enabled", "targets", len(cfg.Webhooks))
+	}
 
 	switch cfg.Server.Transport {
 	case "stdio":

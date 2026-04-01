@@ -101,6 +101,12 @@ tracing:
   enabled: false              # Enable OpenTelemetry distributed tracing
   endpoint: ""                # OTLP gRPC endpoint (e.g. "http://jaeger:4317"); empty = stdout
   sampleRate: 1.0             # Sampling rate 0.0-1.0 (1.0 = sample all traces)
+
+webhooks:
+  - url: "https://hooks.example.com/vibed"
+    events: ["deploy.completed", "deploy.failed"] # or ["*"] for every lifecycle event
+    secret: "env:VIBED_WEBHOOK_SECRET"            # Optional HMAC-SHA256 signing secret
+    timeout: "10s"                                # Optional per-request timeout
 ```
 
 ## Environment Variables
