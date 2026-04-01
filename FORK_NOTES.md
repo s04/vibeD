@@ -25,6 +25,10 @@ Format:
 
 ## Current Entries
 
+## Next PR
+
+- Next PR: Replace the remaining explicit artifact MCP registration calls with a small declarative binding table. The artifact API stays canonical, but the MCP adapter becomes more obviously data-driven and leaves only the genuinely custom projections as code.
+
 ## 2026-04-01
 
 - PR #1: Added an initial PR-loop workflow script and introduced first-pass REST deploy/update endpoints for artifacts (`POST /api/artifacts`, `PUT /api/artifacts/{id}`), along with matching OpenAPI updates and handler tests. This was the fork's first step toward making deployment usable without relying only on MCP.
