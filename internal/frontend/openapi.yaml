@@ -279,6 +279,93 @@ components:
       required:
         - error
 
+    ArtifactListResponse:
+      type: object
+      properties:
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactSummary"
+        total:
+          type: integer
+      required:
+        - artifacts
+        - total
+
+    DeployArtifactRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Unique DNS-safe artifact name
+          example: "my-portfolio"
+        files:
+          type: object
+          additionalProperties:
+            type: string
+          description: Map of relative file path to file content
+        language:
+          type: string
+          description: Optional language/framework hint
+          example: "static"
+        target:
+          $ref: "#/components/schemas/DeploymentTarget"
+        env_vars:
+          type: object
+          additionalProperties:
+            type: string
+        secret_refs:
+          type: object
+          additionalProperties:
+            type: string
+          description: Secret references in format "secret-name:key"
+        port:
+          type: integer
+          description: Application port override
+          example: 3000
+      required:
+        - name
+        - files
+
+    UpdateArtifactRequest:
+      type: object
+      properties:
+        files:
+          type: object
+          additionalProperties:
+            type: string
+          description: Full replacement source file map
+        env_vars:
+          type: object
+          additionalProperties:
+            type: string
+        secret_refs:
+          type: object
+          additionalProperties:
+            type: string
+          description: Secret references in format "secret-name:key"
+
+    DeployResult:
+      type: object
+      properties:
+        artifact_id:
+          type: string
+        name:
+          type: string
+        url:
+          type: string
+        target:
+          type: string
+        status:
+          type: string
+          example: "building"
+        image_ref:
+          type: string
+      required:
+        - artifact_id
+        - name
+        - status
+
     RollbackRequest:
       type: object
       properties:
@@ -377,11 +464,41 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/ArtifactSummary"
+                $ref: "#/components/schemas/ArtifactListResponse"
         "500":
           description: Internal server error
+          content:
+            text/plain:
+              schema:
+                type: string
+    post:
+      tags:
+        - Artifacts
+      summary: Deploy a new artifact
+      description: |
+        Starts an asynchronous deployment and returns immediately with the new
+        artifact ID and an initial `building` status.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeployArtifactRequest"
+      responses:
+        "202":
+          description: Deployment accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeployResult"
+        "400":
+          description: Invalid request body or file limits exceeded
+          content:
+            text/plain:
+              schema:
+                type: string
+        "409":
+          description: Artifact name already exists
           content:
             text/plain:
               schema:
@@ -407,6 +524,44 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Artifact"
+        "404":
+          description: Artifact not found
+          content:
+            text/plain:
+              schema:
+                type: string
+    put:
+      tags:
+        - Artifacts
+      summary: Update an existing artifact
+      description: |
+        Starts an asynchronous rebuild and redeployment of an existing artifact.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Artifact ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateArtifactRequest"
+      responses:
+        "202":
+          description: Update accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeployResult"
+        "400":
+          description: Invalid request body or file limits exceeded
+          content:
+            text/plain:
+              schema:
+                type: string
         "404":
           description: Artifact not found
           content:
