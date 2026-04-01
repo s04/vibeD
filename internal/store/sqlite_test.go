@@ -23,20 +23,20 @@ func newTestSQLiteStore(t *testing.T) *SQLiteStore {
 func testArtifact(id, name string) *api.Artifact {
 	now := time.Now().Truncate(time.Microsecond)
 	return &api.Artifact{
-		ID:        id,
-		Name:      name,
-		OwnerID:   "user-1",
-		Status:    api.StatusRunning,
-		Target:    api.TargetKnative,
-		ImageRef:  "nginx:latest",
-		URL:       "https://example.com",
-		Port:      8080,
+		ID:         id,
+		Name:       name,
+		OwnerID:    "user-1",
+		Status:     api.StatusRunning,
+		Target:     api.TargetKnative,
+		ImageRef:   "nginx:latest",
+		URL:        "https://example.com",
+		Port:       8080,
 		EnvVars:    map[string]string{"FOO": "bar"},
 		SecretRefs: map[string]string{"DB_PASSWORD": "my-creds:password"},
 		Language:   "static",
-		CreatedAt: now,
-		UpdatedAt: now,
-		Version:   1,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Version:    1,
 	}
 }
 
@@ -197,6 +197,36 @@ func TestSQLiteStore_List(t *testing.T) {
 	aliceRunning, err := s.List(ctx, ListOptions{StatusFilter: "running", OwnerID: "alice"})
 	require.NoError(t, err)
 	assert.Len(t, aliceRunning.Artifacts, 2)
+}
+
+func TestSQLiteStore_ListPagination(t *testing.T) {
+	s := newTestSQLiteStore(t)
+	ctx := context.Background()
+
+	for i, id := range []string{"a1", "a2", "a3"} {
+		artifact := testArtifact(id, "app-"+id)
+		artifact.CreatedAt = artifact.CreatedAt.Add(time.Duration(i) * time.Second)
+		artifact.UpdatedAt = artifact.CreatedAt
+		require.NoError(t, s.Create(ctx, artifact))
+	}
+
+	firstPage, err := s.List(ctx, ListOptions{AdminView: true, Limit: 2})
+	require.NoError(t, err)
+	assert.Len(t, firstPage.Artifacts, 2)
+	assert.Equal(t, 3, firstPage.Total)
+	assert.Equal(t, "a3", firstPage.Artifacts[0].ID)
+	assert.Equal(t, "a2", firstPage.Artifacts[1].ID)
+
+	secondPage, err := s.List(ctx, ListOptions{AdminView: true, Offset: 1, Limit: 1})
+	require.NoError(t, err)
+	assert.Len(t, secondPage.Artifacts, 1)
+	assert.Equal(t, 3, secondPage.Total)
+	assert.Equal(t, "a2", secondPage.Artifacts[0].ID)
+
+	clampedPage, err := s.List(ctx, ListOptions{AdminView: true, Offset: 999, Limit: 2})
+	require.NoError(t, err)
+	assert.Empty(t, clampedPage.Artifacts)
+	assert.Equal(t, 3, clampedPage.Total)
 }
 
 func TestSQLiteStore_SharedWith(t *testing.T) {
