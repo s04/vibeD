@@ -55,3 +55,10 @@ func TestOperation_ExposesOn(t *testing.T) {
 		t.Fatal("did not expect other surface exposure")
 	}
 }
+
+func TestMustArtifactOperation(t *testing.T) {
+	op := MustArtifactOperation("artifacts.deploy")
+	if op.MCP == nil || op.MCP.ToolName != "deploy_artifact" {
+		t.Fatal("expected deploy MCP metadata")
+	}
+}

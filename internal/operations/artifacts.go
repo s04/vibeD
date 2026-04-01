@@ -1,5 +1,7 @@
 package operations
 
+import "fmt"
+
 // Surface indicates which external interfaces an operation should be exposed on.
 type Surface string
 
@@ -144,4 +146,15 @@ func ArtifactOperations() []Operation {
 	out := make([]Operation, len(artifactOperations))
 	copy(out, artifactOperations)
 	return out
+}
+
+// MustArtifactOperation returns the artifact operation with the given ID.
+// It panics if the ID is unknown because IDs are static code-level references.
+func MustArtifactOperation(id string) Operation {
+	for _, op := range artifactOperations {
+		if op.ID == id {
+			return op
+		}
+	}
+	panic(fmt.Sprintf("unknown artifact operation: %s", id))
 }
